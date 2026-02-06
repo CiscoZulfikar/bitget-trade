@@ -1,0 +1,67 @@
+import aiosqlite
+import logging
+from config import DB_NAME
+
+logger = logging.getLogger(__name__)
+
+async def init_db():
+    """Initialize the database with the trades table."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS trades (
+                message_id INTEGER PRIMARY KEY,
+                order_id TEXT,
+                symbol TEXT,
+                entry_price REAL,
+                sl_price REAL,
+                tp_price REAL,
+                status TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        await db.commit()
+    logger.info("Database initialized.")
+
+async def store_trade(message_id, order_id, symbol, entry_price, sl_price, tp_price=None, status="OPEN"):
+    """Store a new trade."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute('''
+            INSERT INTO trades (message_id, order_id, symbol, entry_price, sl_price, tp_price, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (message_id, order_id, symbol, entry_price, sl_price, tp_price, status))
+        await db.commit()
+
+async def get_trade_by_msg_id(message_id):
+    """Retrieve trade details by Telegram message ID."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute('SELECT * FROM trades WHERE message_id = ?', (message_id,)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                return {
+                    "message_id": row[0],
+                    "order_id": row[1],
+                    "symbol": row[2],
+                    "entry_price": row[3],
+                    "sl_price": row[4],
+                    "tp_price": row[5],
+                    "status": row[6]
+                }
+            return None
+
+async def update_trade_order_id(message_id, order_id):
+    """Update the order_id for a trade (e.g. after entry)."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute('UPDATE trades SET order_id = ? WHERE message_id = ?', (order_id, message_id))
+        await db.commit()
+
+async def update_trade_sl(message_id, sl_price):
+    """Update the SL price."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute('UPDATE trades SET sl_price = ? WHERE message_id = ?', (sl_price, message_id))
+        await db.commit()
+        
+async def close_trade_db(message_id):
+    """Mark a trade as CLOSED in the DB."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute('UPDATE trades SET status = "CLOSED" WHERE message_id = ?', (message_id,))
+        await db.commit()
