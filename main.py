@@ -1,6 +1,7 @@
 import signal
-
-# ... imports ...
+import asyncio
+import logging
+from telethon import TelegramClient
 
 async def shutdown(signal, loop, notifier):
     """Cleanup tasks tied to the service's shutdown."""
