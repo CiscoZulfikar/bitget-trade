@@ -217,12 +217,39 @@ class TelegramListener:
             await self.notifier.send(f"⚠️ execution failed for {symbol}")
 
     async def handle_update(self, msg_id, data, reply_msg_id=None, is_mock=False):
+        # 1. Try to get symbol from Parser (if specific coin mentioned)
+        symbol = data.get('symbol')
+        
         trade = None
-        if reply_msg_id:
+        if symbol:
+            symbol = symbol.replace("#", "").replace("$", "").upper()
+            if not symbol.endswith("USDT"): symbol += "USDT"
+            # Find ANY open trade for this symbol
+            # (Currently our DB lookup is by msg_id, so we might need a new lookup or iterate)
+            # For simplicity in this iteration, we still rely heavily on reply_msg_id for exact match,
+            # BUT if we have a symbol, we can try to find the open trade for it.
+            # Let's implementation a 'get_open_trade_by_symbol' if needed, or just iterate in memory for now?
+            # Better: Use the DB.
+            # BUT, let's stick to the most robust method: Reply Context > Symbol Match.
+            pass
+
+        # 2. Try to find trade by Reply ID
+        if reply_msg_id and not trade:
             trade = await get_trade_by_msg_id(reply_msg_id)
         
+        # 3. If still no trade, but we have a symbol, try to find the latest OPEN trade for that symbol
+        if not trade and symbol:
+             # We need a helper for this. Let's do a quick DB query here or add to database.py
+             # For now, let's just warn if we can't find it via reply.
+             # actually, let's make it robust:
+             trades = await get_all_open_trades()
+             for t in trades:
+                 if t['symbol'] == symbol:
+                     trade = t
+                     break
+
         if not trade:
-            logger.warning("Update received but original trade not found.")
+            logger.info(f"Update ignored: Could not find original trade for reply {reply_msg_id} or symbol {symbol}")
             return
 
         action = data['action']

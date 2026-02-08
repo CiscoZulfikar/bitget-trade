@@ -32,9 +32,10 @@ If TRADE_CALL:
   "order_type": "MARKET" or "LIMIT" (Default to MARKET unless "LIMIT" is explicitly mentioned in text)
 }}
 
-If UPDATE (e.g., "Booked 1R", "Booked 2.5R", "Move SL to Entry", "Close Half", "SL Hit"):
+If UPDATE (e.g., "Booked 1R", "Booked 2.5R", "Move SL to Entry", "Close Half", "SL Hit", "Closing $COIN here"):
 {{
   "type": "UPDATE",
+  "symbol": "BTCUSDT", (Optional. If not in message, INFER from context/reply chain. Strip #/$)
   "action": "MOVE_SL" or "CLOSE_FULL" or "CLOSE_PARTIAL" or "BOOK_R",
   "value": float (e.g. new SL price, or the R multiple number if Booking R),
   "raw_text": "original text segment"
