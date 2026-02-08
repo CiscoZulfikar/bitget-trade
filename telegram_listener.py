@@ -337,9 +337,34 @@ class TelegramListener:
         await self.notifier.send(msg)
 
     async def periodic_status_task(self):
-        """Runs every 30 minutes to send a status update."""
+        """Runs exactly at xx:00 and xx:30."""
+        from datetime import datetime, timedelta
+
         while True:
-            await asyncio.sleep(1800) # 30 minutes
+            now = datetime.now()
+            # Calculate next target (0 or 30)
+            if now.minute < 30:
+                next_minute = 30
+            else:
+                next_minute = 0
+            
+            # Calculate target time
+            if next_minute == 0:
+                # Next hour
+                target = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+            else:
+                # Same hour, 30 min
+                target = now.replace(minute=30, second=0, microsecond=0)
+            
+            sleep_seconds = (target - now).total_seconds()
+            
+            # Add a small buffer (e.g., 2 seconds) to ensure we are past the mark
+            sleep_seconds += 2
+            
+            logger.info(f"Next Status Update in {sleep_seconds/60:.2f} mins ({target.strftime('%H:%M')})")
+            
+            await asyncio.sleep(sleep_seconds)
+            
             try:
                 await self.send_status()
             except Exception as e:
