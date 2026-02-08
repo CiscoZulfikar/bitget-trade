@@ -128,15 +128,20 @@ class ExchangeHandler:
             try:
                 # Use CCXT implicit method for Bitget V2 Plan Pending
                 if hasattr(self.exchange, 'privateMixGetV2MixOrderOrdersPlanPending'):
+                    # Sanitize Symbol for Bitget V2 (IP/USDT:USDT -> IPUSDT)
+                    raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
+                    
                     params = {
-                        "symbol": symbol,
+                        "symbol": raw_symbol,
                         "productType": "USDT-FUTURES",
                         "planType": "profit_loss" # Crucial!
                     }
+                    # logger.info(f"Fetching Plan Orders for {raw_symbol}...")
                     response = await self.exchange.privateMixGetV2MixOrderOrdersPlanPending(params)
                     
                     if response['code'] == '00000':
                         data = response['data']['entrustedList']
+                        # logger.info(f"Found {len(data)} Plan Orders for {raw_symbol}")
                         for o in data:
                             plan_type = o.get('planType')
                             price = float(o.get('triggerPrice')) if o.get('triggerPrice') else 0.0
@@ -146,6 +151,10 @@ class ExchangeHandler:
                                     if price not in sl_prices: sl_prices.append(price)
                                 elif plan_type == 'profit_plan':
                                     if price not in tp_prices: tp_prices.append(price)
+                    else:
+                        logger.warning(f"Plan Order API Error for {raw_symbol}: {response}")
+            except Exception as e:
+                logger.warning(f"Error fetching plan orders for {symbol}: {e}")
             except Exception as e:
                 logger.warning(f"Error fetching plan orders for {symbol}: {e}")
 
