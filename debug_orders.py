@@ -29,19 +29,31 @@ async def debug_orders():
     print(f"Fetching RAW Plan Orders for {symbol} ({product_type})...")
     
     try:
-        # RAW API CALL to Bitget V2
-        # Endpoint: /api/v2/mix/order/orders-plan-pending
-        endpoint = "/api/v2/mix/order/orders-plan-pending"
+        # Use CCXT Implicit Method for: GET /api/v2/mix/order/orders-plan-pending
+        # CCXT maps this to: privateMixGetOrderOrdersPlanPending
+        
         params = {
             "symbol": symbol,
             "productType": product_type
         }
         
-        print(f"Requesting {endpoint} with {params}...")
-        
-        # Use CCXT's internal private request method to handle signing
-        response = await handler.exchange.request(endpoint, api='v2', method='GET', params=params)
-        
+        # Check if method exists
+        if hasattr(handler.exchange, 'privateMixGetOrderOrdersPlanPending'):
+            print("Using privateMixGetOrderOrdersPlanPending...")
+            response = await handler.exchange.privateMixGetOrderOrdersPlanPending(params)
+        else:
+            # Fallback to generic request with correct 'api' key
+            # 'mix' is usually the key for futures in bitget
+            print("Fallback to generic request (api='mix')...")
+            # Endpoint relative to 'mix': v2/mix/order/orders-plan-pending
+            # But 'mix' might point to /api/mix/v1 or similar?
+            # Let's try explicit URL if all else fails
+             
+            # Try 'v2' as key? No, error showed it failed.
+            # Try 'mix'
+            endpoint = "/v2/mix/order/orders-plan-pending" 
+            response = await handler.exchange.request(endpoint, api='mix', method='GET', params=params)
+
         if response['code'] == '00000':
             data = response['data']['entrustedList']
             print(f"\nFound {len(data)} Plan Orders (RAW API):")
