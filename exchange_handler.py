@@ -99,40 +99,56 @@ class ExchangeHandler:
             logger.warning(f"Could not set leverage: {e}")
 
     async def get_active_tp_sl(self, symbol):
-        """Fetches active SL and TP prices from open orders (Supports Partial TPs)."""
+        """Fetches active SL and TP prices from open orders AND plan orders (Supports Partial TPs)."""
         try:
-            orders = await self.exchange.fetch_open_orders(symbol)
             sl_prices = []
             tp_prices = []
             
-            for o in orders:
-                # Check for stop loss/take profit params or order types
-                # Bitget V2 often returns these as 'triggerPrice' or 'stopPrice'
-                
-                price = None
-                if 'stopPrice' in o and o['stopPrice']:
-                    price = float(o['stopPrice'])
-                elif 'triggerPrice' in o and o['triggerPrice']:
-                    price = float(o['triggerPrice'])
-                
-                if not price: continue
+            # 1. Fetch Standard Open Orders (Limit Orders)
+            try:
+                orders = await self.exchange.fetch_open_orders(symbol)
+                for o in orders:
+                    price = None
+                    if 'stopPrice' in o and o['stopPrice']: price = float(o['stopPrice'])
+                    elif 'triggerPrice' in o and o['triggerPrice']: price = float(o['triggerPrice'])
+                    
+                    if not price: continue
 
-                params = o.get('info', {})
-                plan_type = params.get('planType')
-                
-                # 'loss_plan' = SL, 'profit_plan' = TP
-                # 'normal_plan' could be either, usually identified by side vs entry, but Bitget V2 separates them well.
-                
-                if plan_type == 'loss_plan':
-                    if price not in sl_prices: sl_prices.append(price)
-                elif plan_type == 'profit_plan':
-                    if price not in tp_prices: tp_prices.append(price)
-                else:
-                    # Fallback or generic stop
-                    # If we can't be sure, skip or add to a 'generic' list?
-                    # For now, rely on planType which is robust for Bitget V2
-                    pass
-            
+                    params = o.get('info', {})
+                    plan_type = params.get('planType')
+                    
+                    if plan_type == 'loss_plan':
+                        if price not in sl_prices: sl_prices.append(price)
+                    elif plan_type == 'profit_plan':
+                        if price not in tp_prices: tp_prices.append(price)
+            except Exception as e:
+                logger.warning(f"Error fetching open orders for {symbol}: {e}")
+
+            # 2. Fetch Plan Orders (Partial SL/TPs)
+            try:
+                # Use CCXT implicit method for Bitget V2 Plan Pending
+                if hasattr(self.exchange, 'privateMixGetV2MixOrderOrdersPlanPending'):
+                    params = {
+                        "symbol": symbol,
+                        "productType": "USDT-FUTURES",
+                        "planType": "profit_loss" # Crucial!
+                    }
+                    response = await self.exchange.privateMixGetV2MixOrderOrdersPlanPending(params)
+                    
+                    if response['code'] == '00000':
+                        data = response['data']['entrustedList']
+                        for o in data:
+                            plan_type = o.get('planType')
+                            price = float(o.get('triggerPrice')) if o.get('triggerPrice') else 0.0
+                            
+                            if price > 0:
+                                if plan_type == 'loss_plan':
+                                    if price not in sl_prices: sl_prices.append(price)
+                                elif plan_type == 'profit_plan':
+                                    if price not in tp_prices: tp_prices.append(price)
+            except Exception as e:
+                logger.warning(f"Error fetching plan orders for {symbol}: {e}")
+
             # Sort for display
             sl_prices.sort()
             tp_prices.sort()
