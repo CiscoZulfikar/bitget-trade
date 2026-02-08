@@ -25,57 +25,43 @@ async def debug_orders():
     # Map to Bitget Product Type
     product_type = "USDT-FUTURES" 
     
-    # INSPECT CCXT METHODS
-    print("\n--- Searching for 'Plan' methods in CCXT ---")
-    methods = dir(handler.exchange)
-    plan_methods = [m for m in methods if 'plan' in m.lower() and 'private' in m.lower()]
+    print(f"Fetching Plan Orders for {symbol}...")
     
-    for m in plan_methods:
-        print(f"Found method: {m}")
+    try:
+        # Based on Bitget V2 API Docs for /api/v2/mix/order/orders-plan-pending:
+        # Required: productType, planType
+        # planType options: 'profit_loss' (TP/SL), 'normal_plan' (Trigger)
         
-    # Try the most likely candidate: privateMixGetPlanCurrentPlan or similar
-    # Based on Bitget V1 vs V2 transition, names change.
-    
-    target_method_name = None
-    # Prioritize V2
-    for m in plan_methods:
-        if 'v2' in m.lower() and 'pending' in m.lower():
-            target_method_name = m
-            break
-    
-    if not target_method_name and plan_methods:
-        target_method_name = plan_methods[0] # Fallback
+        params = {
+            "symbol": symbol,
+            "productType": product_type,
+            "planType": "profit_loss", # This is likely the missing key!
+        }
         
-    if target_method_name:
-        print(f"\nAttempting to call {target_method_name}...")
-        method = getattr(handler.exchange, target_method_name)
-        
-        try:
-            # Params might differ. V2 usually takes symbol + productType
-            params = {
-                "symbol": symbol,
-                "productType": product_type
-            }
-            response = await method(params)
-            print(f"Response: {json.dumps(response, indent=2)}")
+        # CCXT Method found in previous step: privateMixGetV2MixOrderOrdersPlanPending
+        if hasattr(handler.exchange, 'privateMixGetV2MixOrderOrdersPlanPending'):
+            print(f"Calling privateMixGetV2MixOrderOrdersPlanPending with {params}...")
+            response = await handler.exchange.privateMixGetV2MixOrderOrdersPlanPending(params)
             
-        except Exception as e:
-            print(f"Method call failed: {e}")
-            
-            # Try V1 params if V2 failed?
-            # V1 often uses just 'symbol'
-            try:
-                print("Retrying with V1 params...")
-                params_v1 = {"symbol": symbol}
-                response = await method(params_v1)
-                print(f"Response V1: {json.dumps(response, indent=2)}")
-            except Exception as e2:
-                print(f"Method call V1 failed: {e2}")
+            if response['code'] == '00000':
+                data = response['data']['entrustedList']
+                print(f"\nFound {len(data)} Plan Orders:")
+                for i, o in enumerate(data):
+                    print(f"\n--- Plan Order {i+1} ---")
+                    print(f"PlanType: {o.get('planType')}")
+                    print(f"TriggerPrice: {o.get('triggerPrice')}")
+                    print(f"Side: {o.get('side')}")
+                    print(f"Status: {o.get('status')}")
+                    print(f"Raw: {json.dumps(o, indent=2)}")
+            else:
+                print(f"API Error: {response}")
+        else:
+            print("Method privateMixGetV2MixOrderOrdersPlanPending not found (unexpected).")
 
-    else:
-        print("No 'Plan' methods found in CCXT instance.")
-
-    await handler.exchange.close()
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        await handler.exchange.close()
 
 if __name__ == "__main__":
     asyncio.run(debug_orders())
