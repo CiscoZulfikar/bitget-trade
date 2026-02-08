@@ -2,6 +2,11 @@ import signal
 import asyncio
 import logging
 from telethon import TelegramClient
+from config import TELEGRAM_API_ID, TELEGRAM_API_HASH, BOT_TOKEN
+from database import init_db
+from telegram_listener import TelegramListener
+from notifier import Notifier
+from keep_alive import keep_alive_task
 
 async def shutdown(signal, loop, notifier):
     """Cleanup tasks tied to the service's shutdown."""
