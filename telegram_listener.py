@@ -121,11 +121,14 @@ class TelegramListener:
         signal_entry = data['entry']
         signal_sl = data['sl']
 
-        # Check Max Trades
-        open_trades_count = await get_open_trade_count()
+        # Check Max Trades (REAL EXCHANGE DATA)
+        # We check actual open positions on Bitget to account for manual trades
+        real_positions = await self.exchange.get_all_positions()
+        open_trades_count = len(real_positions)
+        
         if open_trades_count >= 3:
-             logger.warning(f"Skipping trade {symbol}: Max concurrent trades (3) reached.")
-             await self.notifier.send(f"⚠️ Signal Skipped: Max concurrent trades reached (3). Ignored {symbol}.")
+             logger.warning(f"Skipping trade {symbol}: Max concurrent trades (3) reached (Real: {open_trades_count}).")
+             await self.notifier.send(f"⚠️ Signal Skipped: Max concurrent trades reached ({open_trades_count}/3). Ignored {symbol}.")
              return
         
         # Clean Symbol
@@ -283,7 +286,11 @@ class TelegramListener:
             bal_data = await self.exchange.get_balance()
             free = bal_data['free']
             equity = bal_data['equity']
-            count = await get_open_trade_count()
+            
+            # Use Real Exchange Data
+            real_positions = await self.exchange.get_all_positions()
+            count = len(real_positions)
+            
             await self.notifier.send(
                 f"📊 **System Status**\n\n"
                 f"💎 **Equity:** ${equity:.2f}\n"
@@ -294,14 +301,28 @@ class TelegramListener:
             await self.notifier.send(f"⚠️ Could not fetch status: {e}")
 
     async def send_open_trades(self):
-        trades = await get_all_open_trades()
+        # Use Real Exchange Data
+        trades = await self.exchange.get_all_positions()
         if not trades:
-            await self.notifier.send("📭 No open trades.")
+            await self.notifier.send(f"📭 No open positions on exchange.")
             return
 
-        msg = "📉 **Current Trades**\n\n"
+        msg = f"📉 **Open Positions ({len(trades)})**\n\n"
         for t in trades:
-            msg += f"• **{t['symbol']}** | Entry: {t['entry_price']} | SL: {t['sl_price']}\n"
+            # t is a CCXT position dict
+            # symbol, contracts, entryPrice, side, unrealizedPnl, percentage
+            symbol = t['symbol']
+            side = t['side'].upper()
+            entry = t['entryPrice']
+            amount = t['contracts']
+            pnl = t['unrealizedPnl'] or 0.0
+            roi = t['percentage'] or 0.0
+            
+            msg += (
+                f"• **{symbol}** ({side})\n"
+                f"   Entry: {entry} | Size: {amount}\n"
+                f"   PnL: ${pnl:.2f} ({roi:.2f}%)\n\n"
+            )
         
         await self.notifier.send(msg)
 

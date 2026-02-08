@@ -79,6 +79,19 @@ class ExchangeHandler:
             logger.error(f"Error fetching position for {symbol}: {e}")
             return None
 
+    async def get_all_positions(self):
+        """Fetches ALL open positions from the exchange (for Status/Limit checks)."""
+        try:
+            # fetch_positions(None) or [] should return all for Bitget V2
+            positions = await self.exchange.fetch_positions()
+            
+            # Filter for active positions (size > 0)
+            active_pos = [p for p in positions if float(p['contracts']) > 0]
+            return active_pos
+        except Exception as e:
+            logger.error(f"Error fetching all positions: {e}")
+            return []
+
     async def set_leverage(self, symbol, leverage):
         try:
             await self.exchange.set_leverage(leverage, symbol)
