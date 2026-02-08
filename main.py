@@ -8,6 +8,14 @@ from telegram_listener import TelegramListener
 from notifier import Notifier
 from keep_alive import keep_alive_task
 
+# Configure logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+
+logger = logging.getLogger(__name__)
+
 async def shutdown(signal, loop, notifier):
     """Cleanup tasks tied to the service's shutdown."""
     logger.info(f"Received exit signal {signal.name}...")
