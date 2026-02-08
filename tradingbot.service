@@ -4,14 +4,14 @@ After=network.target
 
 [Service]
 # User running the script
-User=opc
-# Group=opc
+User=${USER}
+# Group=${USER}
 
 # Working Directory
-WorkingDirectory=/home/opc/bitget-trade
+WorkingDirectory=${PROJECT_DIR}
 
 # Command to run (Absolute path to venv python)
-ExecStart=/home/opc/project/venv/bin/python3 main.py
+ExecStart=${VENV_DIR}/bin/python3 main.py
 
 # Restart policy
 Restart=always
