@@ -2,6 +2,7 @@ import asyncio
 from exchange_handler import ExchangeHandler
 import json
 import logging
+import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -13,55 +14,47 @@ async def debug_orders():
     
     # Bypass loading markets
     handler.exchange.options['fetchMarkets'] = ['swap']
-    
-    # FORCE IT:
     try:
         await handler.exchange.load_markets()
-    except Exception as e:
-        print(f"Load markets warning: {e}")
+    except Exception:
+        pass
     
     # ASK USER FOR SYMBOL
     symbol = input("Enter symbol to debug (e.g. BTCUSDT): ").strip().upper()
     if not symbol.endswith("USDT") and ":" not in symbol: symbol += "USDT"
     
-    print(f"Fetching Open Orders & Plan Orders for {symbol}...")
+    # Map to Bitget Product Type
+    product_type = "USDT-FUTURES" 
+    
+    print(f"Fetching RAW Plan Orders for {symbol} ({product_type})...")
+    
     try:
-        # 1. Standard Open Orders (Limit orders in book)
-        print("\n--- 1. FETCH OPEN ORDERS (Standard) ---")
-        orders = await handler.exchange.fetch_open_orders(symbol)
-        print(f"Found {len(orders)} Standard Orders")
-        for o in orders:
-            print(f"ID: {o['id']} | Type: {o['type']} | Price: {o.get('price')} | Stop: {o.get('stopPrice')}")
-
-        # 2. Trigger/Plan Orders (SL/TP usually live here)
-        print("\n--- 2. FETCH OPEN ORDERS (Trigger/Plan) ---")
-        # CCXT bitget uses params request to get plan orders
-        # Bitget V2: mix/plan/current-plan
+        # RAW API CALL to Bitget V2
+        # Endpoint: /api/v2/mix/order/orders-plan-pending
+        endpoint = "/api/v2/mix/order/orders-plan-pending"
+        params = {
+            "symbol": symbol,
+            "productType": product_type
+        }
         
-        # Try passing params to fetch_open_orders
-        # Some exchanges support 'trigger': True
-        orders_trigger = await handler.exchange.fetch_open_orders(symbol, params={'stop': True}) # generic CCXT param?
+        print(f"Requesting {endpoint} with {params}...")
         
-        # If that doesn't work, try raw Bitget V2 endpoint for plan orders
-        if not orders_trigger:
-             print(" ... Trying raw CCXT fetch_open_orders with Bitget specific params ...")
-             # Bitget specific: productType, ...
-             # Actually, let's try 'trigger': True which CCXT might map
-             orders_trigger = await handler.exchange.fetch_open_orders(symbol, params={'trigger': True})
+        # Use CCXT's internal private request method to handle signing
+        response = await handler.exchange.request(endpoint, api='v2', method='GET', params=params)
         
-        # If CCXT mapping fails, let's try implicit API method if available, or direct request
-        if not orders_trigger and hasattr(handler.exchange, 'fetch_trigger_orders'):
-             pass # checks later
-
-        print(f"Found {len(orders_trigger)} Trigger Orders (via params)")
-        for i, o in enumerate(orders_trigger):
-            print(f"\n--- Trigger Order {i+1} ---")
-            print(f"ID: {o['id']}")
-            print(f"Type: {o['type']}")
-            print(f"Side: {o['side']}")
-            print(f"StopPrice: {o.get('stopPrice')}")
-            print(f"TriggerPrice: {o.get('triggerPrice')}")
-            print(f"Info: {json.dumps(o.get('info', {}), indent=2)}")
+        if response['code'] == '00000':
+            data = response['data']['entrustedList']
+            print(f"\nFound {len(data)} Plan Orders (RAW API):")
+            for i, o in enumerate(data):
+                print(f"\n--- Plan Order {i+1} ---")
+                print(f"PlanType: {o.get('planType')}")
+                print(f"TriggerPrice: {o.get('triggerPrice')}")
+                print(f"ExecutePrice: {o.get('executePrice')}")
+                print(f"Side: {o.get('side')}")
+                print(f"Status: {o.get('status')}")
+                print(f"Raw: {json.dumps(o, indent=2)}")
+        else:
+            print(f"API Error: {response}")
 
     except Exception as e:
         print(f"Error: {e}")
