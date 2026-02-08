@@ -310,18 +310,28 @@ class TelegramListener:
         msg = f"📉 **Open Positions ({len(trades)})**\n\n"
         for t in trades:
             # t is a CCXT position dict
-            # symbol, contracts, entryPrice, side, unrealizedPnl, percentage
             symbol = t['symbol']
             side = t['side'].upper()
-            entry = t['entryPrice']
+            entry = t['entryPrice'] or 0.0
+            mark_price = t.get('markPrice') or 0.0
             amount = t['contracts']
             pnl = t['unrealizedPnl'] or 0.0
             roi = t['percentage'] or 0.0
+            leverage = t.get('leverage', '?')
+            liq_price = t.get('liquidationPrice') or 0.0
+            margin = t.get('initialMargin') or t.get('maintenanceMargin') or 0.0
+            
+            # Icon selection
+            icon = "🟢" if pnl >= 0 else "🔴"
             
             msg += (
-                f"• **{symbol}** ({side})\n"
-                f"   Entry: {entry} | Size: {amount}\n"
-                f"   PnL: ${pnl:.2f} ({roi:.2f}%)\n\n"
+                f"{icon} **{symbol}** ({side} x{leverage})\n"
+                f"   💰 **PnL:** ${pnl:.2f} ({roi:.2f}%)\n"
+                f"   📏 **Size:** {amount} (${amount * mark_price:.2f})\n"
+                f"   🎯 **Entry:** {entry}\n"
+                f"   📍 **Mark:** {mark_price}\n"
+                f"   ☠️ **Liq:** {liq_price}\n"
+                f"   🏦 **Margin:** ${margin:.2f}\n\n"
             )
         
         await self.notifier.send(msg)
