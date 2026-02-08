@@ -30,19 +30,35 @@ class RiskManager:
         leverage = min(int(raw_leverage), self.max_leverage)
         return max(1, leverage)
 
-    def check_price_integrity(self, signal_entry, current_market_price):
+    def determine_entry_action(self, signal_entry, current_market_price, explicit_order_type='MARKET'):
         """
-        Aborts trade if current market price has moved >0.5% away from signal entry.
-        Returns True if safe, False if aborted.
+        Determines if we should ENTER (Market/Limit) or ABORT.
+        
+        Logic:
+        1. If explicit_order_type is 'LIMIT', ALWAYS return 'LIMIT'.
+        2. If deviation <= 0.5%: Return 'MARKET' (Safe to enter).
+        3. If deviation > 0.5% and <= 1.0%: Return 'LIMIT' (Try to catch pullback).
+        4. If deviation > 1.0%: Return 'ABORT' (Too risky/late).
+        
+        Returns: (ACTION_STRING, price, reason)
         """
         if signal_entry == 0:
-            return False
-            
+            return 'ABORT', 0, "Signal Entry is 0"
+
+        # Explicit Override
+        if explicit_order_type == 'LIMIT':
+            return 'LIMIT', signal_entry, "Explicit Limit Order requested"
+
         diff_percent = abs(signal_entry - current_market_price) / signal_entry
-        if diff_percent > 0.005: # 0.5%
-            logger.warning(f"Price integrity check failed. Diff: {diff_percent*100:.2f}%")
-            return False
-        return True
+
+        if diff_percent <= 0.005: # 0.5%
+            return 'MARKET', current_market_price, f"Price within 0.5% ({diff_percent*100:.2f}%)"
+            
+        elif diff_percent <= 0.010: # 1.0%
+            return 'LIMIT', signal_entry, f"Price deviated {diff_percent*100:.2f}% (0.5-1.0%). Using Limit."
+            
+        else:
+            return 'ABORT', 0, f"Price deviated {diff_percent*100:.2f}% (>1.0%). Too late."
 
     def scale_price(self, signal_price, market_price):
         """

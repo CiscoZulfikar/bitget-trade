@@ -74,6 +74,46 @@ The setup script creates a system service named `tradingbot`.
 *   **Check Status**: `sudo systemctl status tradingbot`
 *   **View Live Logs**: `sudo journalctl -u tradingbot -f`
 
+## 5. Testing Logic (Simulation)
+
+You can test the bot's logic **without placing real orders** using the `inject_signal.py` script. This is perfect for verifying your keys and the bot's decision making (Market vs Limit).
+
+### How to use:
+1.  Navigate to the project folder:
+    ```bash
+    cd ~/bitget-trade
+    ```
+2.  Run the injector (make sure to quote the message):
+    ```bash
+    ../bitget-trade/venv/bin/python3 inject_signal.py "LONG BTC ENTRY 98000 SL 97500"
+    ```
+
+### Examples:
+
+**1. Market Entry Test** (If price is close to entry):
+```bash
+# Finds current price (e.g. 98000) -> Output: MARKET ACTION
+../bitget-trade/venv/bin/python3 inject_signal.py "LONG BTC ENTRY 98000 SL 97000"
+```
+
+**2. Limit Entry Logic Test** (If price is 0.5% - 1.0% different):
+```bash
+# If current is 98000, and you say 97200 (0.8% diff) -> Output: LIMIT ACTION
+../bitget-trade/venv/bin/python3 inject_signal.py "LONG BTC ENTRY 97200 SL 96000"
+```
+
+**3. Explicit Limit Override**:
+```bash
+# Forces LIMIT even if price is perfect
+../bitget-trade/venv/bin/python3 inject_signal.py "LIMIT LONG BTC ENTRY 98000 SL 97000"
+```
+
+**4. Abort Test** (Price too far > 1%):
+```bash
+# If current is 98000, and you say 90000 -> Output: ABORT
+../bitget-trade/venv/bin/python3 inject_signal.py "LONG BTC ENTRY 90000 SL 89000"
+```
+
 ## Troubleshooting
 
 *   **Server hangs during start**: If the bot crashes, verify swap is active: `free -h` (Swap should > 0). The `setup_gcp.sh` script handles this automatically.

@@ -125,16 +125,25 @@ class TelegramListener:
         entry_price = self.risk_manager.scale_price(signal_entry, market_price)
         sl_price = self.risk_manager.scale_price(signal_sl, market_price)
         
-        # Integrity Check
-        if not self.risk_manager.check_price_integrity(entry_price, market_price):
-            await self.notifier.send(f"⚠️ Aborted {symbol}: Price moved >0.5% from entry.")
+        # Decision Logic (Market vs Limit vs Abort)
+        explicit_type = data.get('order_type', 'MARKET')
+        action, decision_price, reason = self.risk_manager.determine_entry_action(entry_price, market_price, explicit_type)
+        
+        if action == 'ABORT':
+            await self.notifier.send(f"⚠️ Aborted {symbol}: {reason}")
             return
+            
+        # Determine actual price to use for calc/order
+        # If MARKET, use current market price for size calc (approx), but order checks 'market'
+        # If LIMIT, use decision_price (which is the entry price)
+        exec_price = decision_price if action == 'LIMIT' else market_price
 
         # Balance & Risk
         balance = 0.0
         try:
             balance = await self.exchange.get_balance()
         except Exception as e:
+            # ... (Mock balance handling same as before)
             if is_mock:
                  logger.warning(f"Failed to fetch balance ({e}). Using MOCK balance of $1000.")
                  balance = 1000.0
@@ -144,34 +153,34 @@ class TelegramListener:
                 return
 
         position_size_usdt = self.risk_manager.calculate_position_size(balance)
-        leverage = self.risk_manager.calculate_leverage(entry_price, sl_price)
+        leverage = self.risk_manager.calculate_leverage(exec_price, sl_price)
         
         # Place Order
         if is_mock:
             logger.info(f"[MOCK] Skipping execution for {symbol}")
             await self.notifier.send(
                 f"🧪 **MOCK TRADE DETECTED**\n"
-                f"User sent signal. Execution skipped.\n\n"
-                f"**Plan:** {direction} {symbol}\n"
-                f"**Entry:** {entry_price}\n"
+                f"Action: {action} {direction} {symbol}\n"
+                f"**Entry:** {exec_price}\n"
                 f"**Leverage:** {leverage}x\n"
                 f"**Size:** ${position_size_usdt:.2f} ({15}% of ${balance:.2f})\n"
-                f"**SL:** {sl_price}"
+                f"**SL:** {sl_price}\n"
+                f"**Reason:** {reason}"
             )
             # Store in DB as mock? Or skip?
             # Storing allows testing updates. Let's store with status "MOCK"
             await store_trade(msg_id, "MOCK_ORDER_ID", symbol, entry_price, sl_price, status="MOCK")
             return
 
-        amount = (position_size_usdt * leverage) / entry_price
+        amount = (position_size_usdt * leverage) / exec_price
         side = 'buy' if direction.upper() == 'LONG' else 'sell'
-        logger.info(f"Placing {direction} on {symbol} x{leverage}. SL: {sl_price}")
+        logger.info(f"Placing {action} {direction} on {symbol} x{leverage}. SL: {sl_price}")
         
-        order = await self.exchange.place_order(symbol, side, amount, leverage, sl_price=sl_price)
+        order = await self.exchange.place_order(symbol, side, amount, leverage, sl_price=sl_price, price=exec_price if action == 'LIMIT' else None, order_type=action)
         
         if order:
             await store_trade(msg_id, order['id'], symbol, entry_price, sl_price, status="OPEN")
-            await self.notifier.send(f"🟢 Trade Opened: {symbol} at {market_price} with {leverage}x.")
+            await self.notifier.send(f"🟢 {action} Order Opened: {symbol} at {exec_price} with {leverage}x.\nReason: {reason}")
         else:
             await self.notifier.send(f"⚠️ execution failed for {symbol}")
 

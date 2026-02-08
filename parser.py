@@ -28,7 +28,8 @@ If TRADE_CALL:
   "entry": float,
   "sl": float,
   "tp": [float, float...] (optional list),
-  "leverage": float (optional, if specified)
+  "leverage": float (optional, if specified),
+  "order_type": "MARKET" or "LIMIT" (Default to MARKET unless "LIMIT" is explicitly mentioned in text)
 }}
 
 If UPDATE (e.g., "Booked 1R", "Booked 2.5R", "Move SL to Entry", "Close Half", "SL Hit"):

@@ -71,7 +71,7 @@ class ExchangeHandler:
         except Exception as e:
             logger.warning(f"Could not set leverage: {e}")
 
-    async def place_order(self, symbol, side, amount, leverage, sl_price=None, tp_price=None):
+    async def place_order(self, symbol, side, amount, leverage, sl_price=None, tp_price=None, price=None, order_type='market'):
         try:
             # Set leverage first
             await self.set_leverage(symbol, leverage)
@@ -88,8 +88,17 @@ class ExchangeHandler:
                     'type': 'market'
                 }
             
-            # Create Market Order
-            order = await self.exchange.create_order(symbol, 'market', side, amount, params=params)
+            if order_type.lower() == 'limit':
+                if not price:
+                    logger.error("Limit order requested but no price provided.")
+                    return None
+                logger.info(f"Placing LIMIT {side} on {symbol} at {price}")
+                order = await self.exchange.create_order(symbol, 'limit', side, amount, price, params=params)
+            else:
+                # Market
+                logger.info(f"Placing MARKET {side} on {symbol}")
+                order = await self.exchange.create_order(symbol, 'market', side, amount, params=params)
+                
             return order
         except Exception as e:
             logger.error(f"Order placement failed: {e}")
