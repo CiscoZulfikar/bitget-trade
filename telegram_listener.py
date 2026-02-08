@@ -43,7 +43,7 @@ class TelegramListener:
                 elif text_upper in ["STATUS", "/STATUS"]:
                     await self.send_status()
                     return
-                elif text_upper in ["CURRENT_TRADE", "/TRADES", "TRADES"]:
+                elif text_upper in ["CURRENT_TRADE", "/TRADES", "TRADES", "POSITIONS", "/POSITIONS"]:
                     await self.send_open_trades()
                     return
 
@@ -295,7 +295,8 @@ class TelegramListener:
                 f"📊 **System Status**\n\n"
                 f"💎 **Equity:** ${equity:.2f}\n"
                 f"💵 **Free:** ${free:.2f}\n"
-                f"📉 **Open Trades:** {count}/3"
+                f"📉 **Open Trades:** {count}/3\n\n"
+                f"💡 _Send `HELP` for command list._"
             )
         except Exception as e:
             await self.notifier.send(f"⚠️ Could not fetch status: {e}")
@@ -367,6 +368,12 @@ class TelegramListener:
             
             try:
                 await self.send_status()
+                
+                # Also send open positions details if any exist
+                positions = await self.exchange.get_all_positions()
+                if positions:
+                    await self.send_open_trades()
+                    
             except Exception as e:
                 logger.error(f"Periodic update failed: {e}")
 
