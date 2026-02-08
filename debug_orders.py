@@ -2,7 +2,6 @@ import asyncio
 from exchange_handler import ExchangeHandler
 import json
 import logging
-import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -26,54 +25,57 @@ async def debug_orders():
     # Map to Bitget Product Type
     product_type = "USDT-FUTURES" 
     
-    print(f"Fetching RAW Plan Orders for {symbol} ({product_type})...")
+    # INSPECT CCXT METHODS
+    print("\n--- Searching for 'Plan' methods in CCXT ---")
+    methods = dir(handler.exchange)
+    plan_methods = [m for m in methods if 'plan' in m.lower() and 'private' in m.lower()]
     
-    try:
-        # Use CCXT Implicit Method for: GET /api/v2/mix/order/orders-plan-pending
-        # CCXT maps this to: privateMixGetOrderOrdersPlanPending
+    for m in plan_methods:
+        print(f"Found method: {m}")
         
-        params = {
-            "symbol": symbol,
-            "productType": product_type
-        }
+    # Try the most likely candidate: privateMixGetPlanCurrentPlan or similar
+    # Based on Bitget V1 vs V2 transition, names change.
+    
+    target_method_name = None
+    # Prioritize V2
+    for m in plan_methods:
+        if 'v2' in m.lower() and 'pending' in m.lower():
+            target_method_name = m
+            break
+    
+    if not target_method_name and plan_methods:
+        target_method_name = plan_methods[0] # Fallback
         
-        # Check if method exists
-        if hasattr(handler.exchange, 'privateMixGetOrderOrdersPlanPending'):
-            print("Using privateMixGetOrderOrdersPlanPending...")
-            response = await handler.exchange.privateMixGetOrderOrdersPlanPending(params)
-        else:
-            # Fallback to generic request with correct 'api' key
-            # 'mix' is usually the key for futures in bitget
-            print("Fallback to generic request (api='mix')...")
-            # Endpoint relative to 'mix': v2/mix/order/orders-plan-pending
-            # But 'mix' might point to /api/mix/v1 or similar?
-            # Let's try explicit URL if all else fails
-             
-            # Try 'v2' as key? No, error showed it failed.
-            # Try 'mix'
-            endpoint = "/v2/mix/order/orders-plan-pending" 
-            response = await handler.exchange.request(endpoint, api='mix', method='GET', params=params)
+    if target_method_name:
+        print(f"\nAttempting to call {target_method_name}...")
+        method = getattr(handler.exchange, target_method_name)
+        
+        try:
+            # Params might differ. V2 usually takes symbol + productType
+            params = {
+                "symbol": symbol,
+                "productType": product_type
+            }
+            response = await method(params)
+            print(f"Response: {json.dumps(response, indent=2)}")
+            
+        except Exception as e:
+            print(f"Method call failed: {e}")
+            
+            # Try V1 params if V2 failed?
+            # V1 often uses just 'symbol'
+            try:
+                print("Retrying with V1 params...")
+                params_v1 = {"symbol": symbol}
+                response = await method(params_v1)
+                print(f"Response V1: {json.dumps(response, indent=2)}")
+            except Exception as e2:
+                print(f"Method call V1 failed: {e2}")
 
-        if response['code'] == '00000':
-            data = response['data']['entrustedList']
-            print(f"\nFound {len(data)} Plan Orders (RAW API):")
-            for i, o in enumerate(data):
-                print(f"\n--- Plan Order {i+1} ---")
-                print(f"PlanType: {o.get('planType')}")
-                print(f"TriggerPrice: {o.get('triggerPrice')}")
-                print(f"ExecutePrice: {o.get('executePrice')}")
-                print(f"Side: {o.get('side')}")
-                print(f"Status: {o.get('status')}")
-                print(f"Raw: {json.dumps(o, indent=2)}")
-        else:
-            print(f"API Error: {response}")
+    else:
+        print("No 'Plan' methods found in CCXT instance.")
 
-    except Exception as e:
-        print(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        await handler.exchange.close()
+    await handler.exchange.close()
 
 if __name__ == "__main__":
     asyncio.run(debug_orders())
