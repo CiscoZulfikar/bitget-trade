@@ -16,12 +16,12 @@ except ValueError:
     pass # Keep as string if not an int (e.g. "me" or "@username")
 
 # Bitget
-BITGET_API_KEY = os.getenv("BITGET_API_KEY")
-BITGET_SECRET_KEY = os.getenv("BITGET_SECRET_KEY")
-BITGET_PASSPHRASE = os.getenv("BITGET_PASSPHRASE")
+BITGET_API_KEY = os.getenv("BITGET_API_KEY", "").strip()
+BITGET_SECRET_KEY = os.getenv("BITGET_SECRET_KEY", "").strip()
+BITGET_PASSPHRASE = os.getenv("BITGET_PASSPHRASE", "").strip()
 
 # Gemini
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
 # App
 DB_NAME = "trading_bot.db"
