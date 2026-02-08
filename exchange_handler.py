@@ -98,6 +98,49 @@ class ExchangeHandler:
         except Exception as e:
             logger.warning(f"Could not set leverage: {e}")
 
+    async def get_active_tp_sl(self, symbol):
+        """Fetches active SL and TP prices from open orders."""
+        try:
+            orders = await self.exchange.fetch_open_orders(symbol)
+            sl_price = 0.0
+            tp_price = 0.0
+            
+            for o in orders:
+                # Check for stop loss/take profit params or order types
+                # Bitget V2 often returns these as 'triggerPrice' or 'stopPrice'
+                # And type usually 'stop_market', 'take_profit_market', etc.
+                
+                # Check raw info if standard fields are ambiguous
+                # Standard CCXT: order['stopPrice'], order['triggerPrice']
+                
+                price = o.get('stopPrice') or o.get('triggerPrice') or 0.0
+                if price == 0: continue
+
+                # Heuristic to distinguish SL vs TP based on side
+                # If Position is LONG (we don't know pos here, but we can assume logic)
+                # But cleaner: check order params/types if available
+                
+                # Simplified logic: 
+                # If there is a 'reduceOnly' order with stopPrice
+                
+                params = o.get('info', {})
+                # Bitget specific planType: 'loss_plan' (SL), 'profit_plan' (TP)
+                plan_type = params.get('planType')
+                
+                if plan_type == 'loss_plan':
+                    sl_price = price
+                elif plan_type == 'profit_plan':
+                    tp_price = price
+                else:
+                    # Fallback for generic stop orders
+                    # If we can't distinguish, we might return just one
+                    pass
+            
+            return tp_price, sl_price
+        except Exception as e:
+            logger.warning(f"Could not fetch SL/TP for {symbol}: {e}")
+            return 0.0, 0.0
+
     async def place_order(self, symbol, side, amount, leverage, sl_price=None, tp_price=None, price=None, order_type='market'):
         try:
             # Set leverage first

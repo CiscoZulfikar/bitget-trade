@@ -349,6 +349,9 @@ class TelegramListener:
             liq_price = t.get('liquidationPrice') or 0.0
             margin = t.get('initialMargin') or t.get('maintenanceMargin') or 0.0
             
+            # Fetch active SL/TP
+            tp, sl = await self.exchange.get_active_tp_sl(symbol)
+            
             # Icon selection
             icon = "🟢" if pnl >= 0 else "🔴"
             
@@ -358,6 +361,8 @@ class TelegramListener:
                 f"   📏 **Size:** {amount} (${amount * mark_price:.2f})\n"
                 f"   🎯 **Entry:** {entry}\n"
                 f"   📍 **Mark:** {mark_price}\n"
+                f"   🛑 **SL:** {sl if sl > 0 else 'None'}\n"
+                f"   🎯 **TP:** {tp if tp > 0 else 'None'}\n"
                 f"   ☠️ **Liq:** {liq_price}\n"
                 f"   🏦 **Margin:** ${margin:.2f}\n\n"
             )
