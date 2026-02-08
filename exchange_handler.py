@@ -99,47 +99,48 @@ class ExchangeHandler:
             logger.warning(f"Could not set leverage: {e}")
 
     async def get_active_tp_sl(self, symbol):
-        """Fetches active SL and TP prices from open orders."""
+        """Fetches active SL and TP prices from open orders (Supports Partial TPs)."""
         try:
             orders = await self.exchange.fetch_open_orders(symbol)
-            sl_price = 0.0
-            tp_price = 0.0
+            sl_prices = []
+            tp_prices = []
             
             for o in orders:
                 # Check for stop loss/take profit params or order types
                 # Bitget V2 often returns these as 'triggerPrice' or 'stopPrice'
-                # And type usually 'stop_market', 'take_profit_market', etc.
                 
-                # Check raw info if standard fields are ambiguous
-                # Standard CCXT: order['stopPrice'], order['triggerPrice']
+                price = None
+                if 'stopPrice' in o and o['stopPrice']:
+                    price = float(o['stopPrice'])
+                elif 'triggerPrice' in o and o['triggerPrice']:
+                    price = float(o['triggerPrice'])
                 
-                price = o.get('stopPrice') or o.get('triggerPrice') or 0.0
-                if price == 0: continue
+                if not price: continue
 
-                # Heuristic to distinguish SL vs TP based on side
-                # If Position is LONG (we don't know pos here, but we can assume logic)
-                # But cleaner: check order params/types if available
-                
-                # Simplified logic: 
-                # If there is a 'reduceOnly' order with stopPrice
-                
                 params = o.get('info', {})
-                # Bitget specific planType: 'loss_plan' (SL), 'profit_plan' (TP)
                 plan_type = params.get('planType')
                 
+                # 'loss_plan' = SL, 'profit_plan' = TP
+                # 'normal_plan' could be either, usually identified by side vs entry, but Bitget V2 separates them well.
+                
                 if plan_type == 'loss_plan':
-                    sl_price = price
+                    if price not in sl_prices: sl_prices.append(price)
                 elif plan_type == 'profit_plan':
-                    tp_price = price
+                    if price not in tp_prices: tp_prices.append(price)
                 else:
-                    # Fallback for generic stop orders
-                    # If we can't distinguish, we might return just one
+                    # Fallback or generic stop
+                    # If we can't be sure, skip or add to a 'generic' list?
+                    # For now, rely on planType which is robust for Bitget V2
                     pass
             
-            return tp_price, sl_price
+            # Sort for display
+            sl_prices.sort()
+            tp_prices.sort()
+            
+            return tp_prices, sl_prices
         except Exception as e:
             logger.warning(f"Could not fetch SL/TP for {symbol}: {e}")
-            return 0.0, 0.0
+            return [], []
 
     async def place_order(self, symbol, side, amount, leverage, sl_price=None, tp_price=None, price=None, order_type='market'):
         try:

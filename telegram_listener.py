@@ -350,7 +350,11 @@ class TelegramListener:
             margin = t.get('initialMargin') or t.get('maintenanceMargin') or 0.0
             
             # Fetch active SL/TP
-            tp, sl = await self.exchange.get_active_tp_sl(symbol)
+            tp_list, sl_list = await self.exchange.get_active_tp_sl(symbol)
+            
+            # Format as strings
+            sl_str = ", ".join([str(x) for x in sl_list]) if sl_list else "None"
+            tp_str = ", ".join([str(x) for x in tp_list]) if tp_list else "None"
             
             # Icon selection
             icon = "🟢" if pnl >= 0 else "🔴"
@@ -361,8 +365,8 @@ class TelegramListener:
                 f"   📏 **Size:** {amount} (${amount * mark_price:.2f})\n"
                 f"   🎯 **Entry:** {entry}\n"
                 f"   📍 **Mark:** {mark_price}\n"
-                f"   🛑 **SL:** {sl if sl > 0 else 'None'}\n"
-                f"   🎯 **TP:** {tp if tp > 0 else 'None'}\n"
+                f"   🛑 **SL:** {sl_str}\n"
+                f"   🎯 **TP:** {tp_str}\n"
                 f"   ☠️ **Liq:** {liq_price}\n"
                 f"   🏦 **Margin:** ${margin:.2f}\n\n"
             )
