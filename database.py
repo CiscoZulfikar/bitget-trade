@@ -65,3 +65,30 @@ async def close_trade_db(message_id):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute('UPDATE trades SET status = "CLOSED" WHERE message_id = ?', (message_id,))
         await db.commit()
+
+async def get_open_trade_count():
+    """Get the number of currently OPEN trades."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute('SELECT COUNT(*) FROM trades WHERE status = "OPEN"') as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
+async def get_all_open_trades():
+    """Get all currently OPEN trades."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute('SELECT * FROM trades WHERE status = "OPEN"') as cursor:
+            rows = await cursor.fetchall()
+            trades = []
+            for row in rows:
+                trades.append({
+                    "message_id": row["message_id"],
+                    "order_id": row["order_id"],
+                    "symbol": row["symbol"],
+                    "entry_price": row["entry_price"],
+                    "sl_price": row["sl_price"],
+                    "tp_price": row["tp_price"],
+                    "status": row["status"],
+                    "timestamp": row["timestamp"]
+                })
+            return trades

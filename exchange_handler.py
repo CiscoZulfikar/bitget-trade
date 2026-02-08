@@ -50,9 +50,23 @@ class ExchangeHandler:
                 raise raw_error
 
     async def get_balance(self):
-        """Fetches REAL FREE USDT balance."""
+        """Fetches Balance Breakdown (Free vs Equity)."""
+        # CCXT 'fetch_balance' usually returns 'total' (equity) and 'free' (available)
         balance = await self.exchange.fetch_balance()
-        return balance['USDT']['free']
+        
+        # Bitget Specifics:
+        # 'free': Available for trade (Cross margin balance - frozen)
+        # 'total': Equity (Balance + PnL)
+        # Note: CCXT mapping might vary, but widely:
+        # balance['USDT']['free'] = Available
+        # balance['USDT']['total'] = Equity (approx) or Wallet Balance
+        
+        # For Bitget Futures, we want "usdtEquity" which is often mapped to 'total'
+        # Let's return a detailed dict
+        return {
+            'free': balance.get('USDT', {}).get('free', 0.0),
+            'equity': balance.get('USDT', {}).get('total', 0.0)
+        }
 
     async def get_position(self, symbol):
         """Fetches the current open position for the symbol."""

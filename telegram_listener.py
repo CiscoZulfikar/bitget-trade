@@ -5,7 +5,7 @@ from config import TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_CHANNEL_ID, NOTI
 from parser import parse_message
 from risk_manager import RiskManager
 from exchange_handler import ExchangeHandler
-from database import store_trade, get_trade_by_msg_id, update_trade_order_id, update_trade_sl, close_trade_db
+from database import store_trade, get_trade_by_msg_id, update_trade_order_id, update_trade_sl, close_trade_db, get_open_trade_count, get_all_open_trades
 from notifier import Notifier
 
 logger = logging.getLogger(__name__)
@@ -34,6 +34,19 @@ class TelegramListener:
         async def handler_dm(event):
             # Only process DMs from the Admin
             if event.sender_id == NOTIFICATION_USER_ID:
+                text_upper = event.message.message.upper().strip()
+
+                # Command Handling
+                if text_upper in ["HELP", "/HELP"]:
+                    await self.send_help()
+                    return
+                elif text_upper in ["STATUS", "/STATUS"]:
+                    await self.send_status()
+                    return
+                elif text_upper in ["CURRENT_TRADE", "/TRADES", "TRADES"]:
+                    await self.send_open_trades()
+                    return
+
                 logger.info(f"Received DM from Admin. Processing as Mock Signal.")
                 await self.process_message(event, is_mock_override=True)
 
@@ -41,6 +54,9 @@ class TelegramListener:
         
         # Fetch and notify last message on startup
         await self.notify_last_message()
+        
+        # Start Periodic Status Update (30m)
+        asyncio.create_task(self.periodic_status_task())
         
         # We don't run_until_disconnected here anymore, main does it
 
@@ -101,6 +117,13 @@ class TelegramListener:
         direction = data['direction']
         signal_entry = data['entry']
         signal_sl = data['sl']
+
+        # Check Max Trades
+        open_trades_count = await get_open_trade_count()
+        if open_trades_count >= 3:
+             logger.warning(f"Skipping trade {symbol}: Max concurrent trades (3) reached.")
+             await self.notifier.send(f"⚠️ Signal Skipped: Max concurrent trades reached (3). Ignored {symbol}.")
+             return
         
         # Clean Symbol
         # Remove #, $
@@ -141,12 +164,15 @@ class TelegramListener:
         # Balance & Risk
         balance = 0.0
         try:
-            balance = await self.exchange.get_balance()
+            balance_data = await self.exchange.get_balance()
+            balance = balance_data['free']
+            equity = balance_data['equity']
         except Exception as e:
             # ... (Mock balance handling same as before)
             if is_mock:
                  logger.warning(f"Failed to fetch balance ({e}). Using MOCK balance of $1000.")
                  balance = 1000.0
+                 equity = 1000.0
             else:
                 logger.error(f"Failed to fetch balance: {e}")
                 await self.notifier.send("⚠️ Error: Could not fetch wallet balance.")
@@ -163,7 +189,7 @@ class TelegramListener:
                 f"Action: {action} {direction} {symbol}\n"
                 f"**Entry:** {exec_price}\n"
                 f"**Leverage:** {leverage}x\n"
-                f"**Size:** ${position_size_usdt:.2f} ({15}% of ${balance:.2f})\n"
+                f"**Size:** ${position_size_usdt:.2f} ({15}% of ${balance:.2f} Free)\n"
                 f"**SL:** {sl_price}\n"
                 f"**Reason:** {reason}"
             )
@@ -224,12 +250,64 @@ class TelegramListener:
             if success:
                 await close_trade_db(trade['message_id'])
                 current_price = await self.exchange.get_market_price(symbol)
-                new_balance = await self.exchange.get_balance()
-                await self.notifier.send(f"🔴 Trade Closed: {symbol} at {current_price}. Wallet: ${new_balance:.2f}.")
+                bal_data = await self.exchange.get_balance()
+                new_equity = bal_data['equity']
+                await self.notifier.send(f"🔴 Trade Closed: {symbol} at {current_price}. Equity: ${new_equity:.2f}.")
             else:
                 await self.notifier.send(f"⚠️ Failed to close (or no position for) {symbol}.")
 
     async def close(self):
         """Cleanup resources."""
         await self.exchange.close()
+
+    # --- New Features ---
+
+    async def send_help(self):
+        help_text = (
+            "🤖 **Bot Commands**\n\n"
+            "• `HELP`: Show this message.\n"
+            "• `STATUS`: Show Equity, Free Balance & Open Trades.\n"
+            "• `CURRENT_TRADE`: List all open positions.\n"
+            "\n"
+            "**Mock Signals (DM Me):**\n"
+            "`LONG BTC ENTRY 90000 SL 89000`\n"
+            "`LIMIT SHORT ETH ENTRY 3000 SL 3100`"
+        )
+        await self.notifier.send(help_text)
+
+    async def send_status(self):
+        try:
+            bal_data = await self.exchange.get_balance()
+            free = bal_data['free']
+            equity = bal_data['equity']
+            count = await get_open_trade_count()
+            await self.notifier.send(
+                f"📊 **System Status**\n\n"
+                f"💎 **Equity:** ${equity:.2f}\n"
+                f"💵 **Free:** ${free:.2f}\n"
+                f"📉 **Open Trades:** {count}/3"
+            )
+        except Exception as e:
+            await self.notifier.send(f"⚠️ Could not fetch status: {e}")
+
+    async def send_open_trades(self):
+        trades = await get_all_open_trades()
+        if not trades:
+            await self.notifier.send("📭 No open trades.")
+            return
+
+        msg = "📉 **Current Trades**\n\n"
+        for t in trades:
+            msg += f"• **{t['symbol']}** | Entry: {t['entry_price']} | SL: {t['sl_price']}\n"
+        
+        await self.notifier.send(msg)
+
+    async def periodic_status_task(self):
+        """Runs every 30 minutes to send a status update."""
+        while True:
+            await asyncio.sleep(1800) # 30 minutes
+            try:
+                await self.send_status()
+            except Exception as e:
+                logger.error(f"Periodic update failed: {e}")
 

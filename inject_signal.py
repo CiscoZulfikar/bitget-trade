@@ -52,9 +52,11 @@ async def inject_signal(message_text):
     print("\n3️⃣  Fetching Live Market Data...")
     try:
         market_price = await exchange.get_market_price(symbol)
-        balance = await exchange.get_balance()
+        bal_data = await exchange.get_balance()
+        balance = bal_data['free']
+        equity = bal_data['equity']
         print(f"   ✅ Market Price: {market_price}")
-        print(f"   ✅ Wallet Balance: ${balance:.2f}")
+        print(f"   ✅ Wallet Balance (Free): ${balance:.2f} (Equity: ${equity:.2f})")
     except Exception as e:
         print(f"   ❌ Failed to fetch data: {e}")
         await exchange.close()
