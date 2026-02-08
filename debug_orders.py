@@ -12,7 +12,7 @@ async def debug_orders():
     handler = ExchangeHandler()
     
     # Bypass loading markets to avoid Spot API errors
-    handler.exchange.options['fetchMarkets'] = ['linear'] # Only linear futures
+    handler.exchange.options['fetchMarkets'] = ['swap'] # Use 'swap' for USDT-FUTURES in CCXT logic
     # handler.exchange.load_markets = lambda: None # DANGEROUS hack, better to just catch error?
     # Actually, ExchangeHandler init already disables fetchCurrencies.
     # The error 'v2/spot/public/symbols' comes from load_markets().
