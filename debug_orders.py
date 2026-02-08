@@ -11,45 +11,62 @@ async def debug_orders():
     print("Initializing Exchange Handler...")
     handler = ExchangeHandler()
     
-    # Bypass loading markets to avoid Spot API errors
-    handler.exchange.options['fetchMarkets'] = ['swap'] # Use 'swap' for USDT-FUTURES in CCXT logic
-    # handler.exchange.load_markets = lambda: None # DANGEROUS hack, better to just catch error?
-    # Actually, ExchangeHandler init already disables fetchCurrencies.
-    # The error 'v2/spot/public/symbols' comes from load_markets().
-    # Let's wrap the fetch in a try/except that ignores market loading issues if possible
-    # OR better: just don't call anything that triggers it? 
-    # fetch_open_orders usually triggers load_markets.
+    # Bypass loading markets
+    handler.exchange.options['fetchMarkets'] = ['swap']
     
     # FORCE IT:
-    await handler.exchange.load_markets() # If this fails, we catch it?
+    try:
+        await handler.exchange.load_markets()
+    except Exception as e:
+        print(f"Load markets warning: {e}")
     
     # ASK USER FOR SYMBOL
     symbol = input("Enter symbol to debug (e.g. BTCUSDT): ").strip().upper()
-    if not symbol.endswith("USDT"): symbol += "USDT"
+    if not symbol.endswith("USDT") and ":" not in symbol: symbol += "USDT"
     
-    print(f"Fetching Open Orders for {symbol}...")
+    print(f"Fetching Open Orders & Plan Orders for {symbol}...")
     try:
-        # Fetch raw open orders to see structure
+        # 1. Standard Open Orders (Limit orders in book)
+        print("\n--- 1. FETCH OPEN ORDERS (Standard) ---")
         orders = await handler.exchange.fetch_open_orders(symbol)
+        print(f"Found {len(orders)} Standard Orders")
+        for o in orders:
+            print(f"ID: {o['id']} | Type: {o['type']} | Price: {o.get('price')} | Stop: {o.get('stopPrice')}")
+
+        # 2. Trigger/Plan Orders (SL/TP usually live here)
+        print("\n--- 2. FETCH OPEN ORDERS (Trigger/Plan) ---")
+        # CCXT bitget uses params request to get plan orders
+        # Bitget V2: mix/plan/current-plan
         
-        print(f"\nFound {len(orders)} Open Orders:")
+        # Try passing params to fetch_open_orders
+        # Some exchanges support 'trigger': True
+        orders_trigger = await handler.exchange.fetch_open_orders(symbol, params={'stop': True}) # generic CCXT param?
         
-        for i, o in enumerate(orders):
-            print(f"\n--- Order {i+1} ---")
-            # Print Key Fields
+        # If that doesn't work, try raw Bitget V2 endpoint for plan orders
+        if not orders_trigger:
+             print(" ... Trying raw CCXT fetch_open_orders with Bitget specific params ...")
+             # Bitget specific: productType, ...
+             # Actually, let's try 'trigger': True which CCXT might map
+             orders_trigger = await handler.exchange.fetch_open_orders(symbol, params={'trigger': True})
+        
+        # If CCXT mapping fails, let's try implicit API method if available, or direct request
+        if not orders_trigger and hasattr(handler.exchange, 'fetch_trigger_orders'):
+             pass # checks later
+
+        print(f"Found {len(orders_trigger)} Trigger Orders (via params)")
+        for i, o in enumerate(orders_trigger):
+            print(f"\n--- Trigger Order {i+1} ---")
             print(f"ID: {o['id']}")
             print(f"Type: {o['type']}")
             print(f"Side: {o['side']}")
-            print(f"Price: {o.get('price')}")
             print(f"StopPrice: {o.get('stopPrice')}")
             print(f"TriggerPrice: {o.get('triggerPrice')}")
-            print(f"Status: {o['status']}")
-            
-            # Print 'info' which contains raw exchange response
-            print(f"Raw 'info': {json.dumps(o.get('info', {}), indent=2)}")
-            
+            print(f"Info: {json.dumps(o.get('info', {}), indent=2)}")
+
     except Exception as e:
         print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         await handler.exchange.close()
 
