@@ -7,15 +7,15 @@ This guide shows you how to deploy the Bitget Trading Bot to a **completely free
 1.  Go to [Google Cloud Console](https://console.cloud.google.com/compute/instances).
 2.  Click **Create Instance**.
 3.  **Name**: `bitget-bot` (or similar).
-4.  **Region**: Choose `us-west1`, `us-central1`, or `us-east1` (these typically have Free Tier availability).
-5.  **Zone**: Any.
+4.  **Region**: `us-west1` (Oregon) - *User specified*.
+5.  **Zone**: `us-west1-b` - *User specified*.
 6.  **Machine Configuration**:
     *   Series: `E2`
     *   Machine type: `e2-micro` (2 vCPU, 1 GB memory) - **Wait for the "Micro instance is free..." badge to appear.**
 7.  **Boot Disk**:
     *   Click "Change".
-    *   OS: **Ubuntu** (recommended) or Debian.
-    *   Version: Ubuntu 22.04 LTS (x86/64).
+    *   OS: **Ubuntu Minimal** (or Ubuntu).
+    *   Version: **Ubuntu 24.04 LTS** (noble) - `ubuntu-minimal-2404-noble-amd64-v20260129`
     *   Size: **30 GB** (Standard Persistent Disk). *Note: Up to 30GB is free.*
     *   *Note: GCP "Always Free Tier" includes 30GB Standard PD. Choose Standard Persistent Disk, not Balanced.*
 8.  **Firewall**:
