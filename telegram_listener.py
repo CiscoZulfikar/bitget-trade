@@ -55,6 +55,9 @@ class TelegramListener:
         # Fetch and notify last message on startup
         await self.notify_last_message()
         
+        # Send Status on Startup
+        await self.send_status()
+        
         # Start Periodic Status Update (30m)
         asyncio.create_task(self.periodic_status_task())
         
