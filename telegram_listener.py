@@ -439,30 +439,32 @@ class TelegramListener:
             msg = "🌍 **Market Overview**\n\n"
             msg += "**Crypto (Top 8):**\n"
             for s in targets[:8]:
-                data = prices.get(s, {'last': 0.0, 'percentage': 0.0})
+                data = prices.get(s, {'last': 0.0, 'percentage': 0.0, 'daily_pct': 0.0})
                 p = data['last']
-                pct = data['percentage']
+                pct_roll = data['percentage'] # Rolling 24h
+                pct_daily = data.get('daily_pct', 0.0) # Daily Candle
                 
-                # Format Percentage
-                # CCXT usually returns percentage as 5.2 means 5.2%. Or 0.052? 
-                # Bitget returns raw change usually.
-                # Assuming CCXT standardizes to % (e.g. -1.5) or decimal (e.g. -0.015).
-                # Usually CCXT is percentage value (e.g. -1.5).
+                # Format: Price (24h: +x% | Day: +y%)
+                icon = "🟢" if pct_daily >= 0 else "🔴"
                 
-                icon = "🟢" if pct >= 0 else "🔴"
-                pct_str = f"{pct:+.2f}%"
-                
-                msg += f"• {s.replace('USDT', '')}:  `${p:,.4f}` ({icon} {pct_str})\n"
+                msg += (
+                    f"• {s.replace('USDT', '')}:  `${p:,.2f}` {icon}\n"
+                    f"   └ 24h: `{pct_roll:+.2f}%` | Day: `{pct_daily:+.2f}%`\n"
+                )
                 
             msg += "\n**Metals:**\n"
             for s in targets[8:]:
-                data = prices.get(s, {'last': 0.0, 'percentage': 0.0})
+                data = prices.get(s, {'last': 0.0, 'percentage': 0.0, 'daily_pct': 0.0})
                 p = data['last']
-                pct = data['percentage']
-                icon = "🟢" if pct >= 0 else "🔴"
-                pct_str = f"{pct:+.2f}%"
+                pct_roll = data['percentage']
+                pct_daily = data.get('daily_pct', 0.0)
                 
-                msg += f"• {s.replace('USDT', '')}:  `${p:,.2f}` ({icon} {pct_str})\n"
+                icon = "🟢" if pct_daily >= 0 else "🔴"
+                
+                msg += (
+                    f"• {s.replace('USDT', '')}:  `${p:,.2f}` {icon}\n"
+                    f"   └ 24h: `{pct_roll:+.2f}%` | Day: `{pct_daily:+.2f}%`\n"
+                )
                 
             await self.notifier.send(msg)
             

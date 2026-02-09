@@ -222,17 +222,31 @@ class ExchangeHandler:
                              break
                 
                 if data:
+                    # Rolling 24h Change
+                    pct_rolling = data.get('percentage', 0.0) 
+                    
+                    # Daily Candle Change (UTC)
+                    # Bitget raw info 'changeUtc24h' is usually decimal (e.g. -0.00708)
+                    daily_change = 0.0
+                    if 'info' in data and 'changeUtc24h' in data['info']:
+                        try:
+                            # changeUtc24h is decimal string, convert to %
+                            daily_change = float(data['info']['changeUtc24h']) * 100
+                        except:
+                            pass
+                    
                     results[s] = {
                         'last': data.get('last', 0.0),
-                        'percentage': data.get('percentage', 0.0) # 24h change %
+                        'percentage': pct_rolling,      # Rolling 24h %
+                        'daily_pct': daily_change       # Daily UTC Candle %
                     }
                 else:
-                    results[s] = {'last': 0.0, 'percentage': 0.0}
+                    results[s] = {'last': 0.0, 'percentage': 0.0, 'daily_pct': 0.0}
                     
             return results
         except Exception as e:
             logger.error(f"Error fetching tickers: {e}")
-            return {s: {'last': 0.0, 'percentage': 0.0} for s in symbols}
+            return {s: {'last': 0.0, 'percentage': 0.0, 'daily_pct': 0.0} for s in symbols}
 
     async def place_order(self, symbol, side, amount, leverage, sl_price=None, tp_price=None, price=None, order_type='market'):
         try:
