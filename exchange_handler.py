@@ -185,23 +185,54 @@ class ExchangeHandler:
             return None
 
     async def get_tickers(self, symbols):
-        """Fetches current prices for a list of symbols."""
+        """Fetches current prices and 24h change for a list of symbols."""
         try:
-            # fetch_tickers is efficient if supported
-            tickers = await self.exchange.fetch_tickers(symbols)
-            # Return dict {symbol: price}
-            return {s: t['last'] for s, t in tickers.items() if t.get('last')}
-        except Exception as e:
-            logger.error(f"Error fetching tickers: {e}")
-            # Fallback loop
+            # Fetch ALL Future tickers to ensure we get the right productType data
+            # Passing specific symbols to fetch_tickers with params can be flaky in CCXT/Bitget
+            tickers = await self.exchange.fetch_tickers(params={'productType': 'USDT-FUTURES'})
+            
             results = {}
             for s in symbols:
-                try:
-                    price = await self.get_market_price(s)
-                    results[s] = price
-                except:
-                    results[s] = 0.0
+                # CCXT usually normalizes Bitget Futures symbols to 'BTC/USDT:USDT'
+                # But our input 'symbols' are 'BTCUSDT'.
+                # We need to match loose or strict.
+                
+                # Check direct match or normalized match
+                data = None
+                
+                # Try finding valid ticker
+                # 1. Direct match (unlikely if CCXT loaded markets)
+                if s in tickers:
+                    data = tickers[s]
+                
+                # 2. CCXT Normalized match (BTC/USDT:USDT)
+                if not data:
+                    # Construct CCXT format: IPUSDT -> IP/USDT:USDT
+                    base = s.replace("USDT", "")
+                    ccxt_sym = f"{base}/USDT:USDT"
+                    if ccxt_sym in tickers:
+                        data = tickers[ccxt_sym]
+                        
+                # 3. Raw match (if strict mode off)
+                if not data:
+                    # Scan keys
+                    for k, v in tickers.items():
+                        if k.replace("/", "").replace(":", "") == s or k.replace("/", "").split(":")[0] == s:
+                             data = v
+                             break
+                
+                if data:
+                    results[s] = {
+                        'last': data.get('last', 0.0),
+                        'percentage': data.get('percentage', 0.0) # 24h change %
+                    }
+                else:
+                    results[s] = {'last': 0.0, 'percentage': 0.0}
+                    
             return results
+        except Exception as e:
+            logger.error(f"Error fetching tickers: {e}")
+            return {s: {'last': 0.0, 'percentage': 0.0} for s in symbols}
 
     async def place_order(self, symbol, side, amount, leverage, sl_price=None, tp_price=None, price=None, order_type='market'):
         try:

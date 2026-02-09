@@ -67,9 +67,6 @@ class TelegramListener:
         # Start Trade Monitor (Immediate Alerts)
         asyncio.create_task(self.monitor_trade_updates())
 
-        # We don't run_until_disconnected here anymore, main does it
-
-
     async def notify_last_message(self):
         try:
             logger.info("Fetching last message from channel...")
@@ -430,13 +427,30 @@ class TelegramListener:
             msg = "🌍 **Market Overview**\n\n"
             msg += "**Crypto (Top 8):**\n"
             for s in targets[:8]:
-                p = prices.get(s, 0.0)
-                msg += f"• {s.replace('USDT', '')}:  `${p:,.4f}`\n"
+                data = prices.get(s, {'last': 0.0, 'percentage': 0.0})
+                p = data['last']
+                pct = data['percentage']
+                
+                # Format Percentage
+                # CCXT usually returns percentage as 5.2 means 5.2%. Or 0.052? 
+                # Bitget returns raw change usually.
+                # Assuming CCXT standardizes to % (e.g. -1.5) or decimal (e.g. -0.015).
+                # Usually CCXT is percentage value (e.g. -1.5).
+                
+                icon = "🟢" if pct >= 0 else "🔴"
+                pct_str = f"{pct:+.2f}%"
+                
+                msg += f"• {s.replace('USDT', '')}:  `${p:,.4f}` ({icon} {pct_str})\n"
                 
             msg += "\n**Metals:**\n"
             for s in targets[8:]:
-                p = prices.get(s, 0.0)
-                msg += f"• {s.replace('USDT', '')}:  `${p:,.2f}`\n"
+                data = prices.get(s, {'last': 0.0, 'percentage': 0.0})
+                p = data['last']
+                pct = data['percentage']
+                icon = "🟢" if pct >= 0 else "🔴"
+                pct_str = f"{pct:+.2f}%"
+                
+                msg += f"• {s.replace('USDT', '')}:  `${p:,.2f}` ({icon} {pct_str})\n"
                 
             await self.notifier.send(msg)
             
