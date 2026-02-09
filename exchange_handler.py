@@ -52,7 +52,8 @@ class ExchangeHandler:
     async def get_balance(self):
         """Fetches Balance Breakdown (Free vs Equity)."""
         # CCXT 'fetch_balance' usually returns 'total' (equity) and 'free' (available)
-        balance = await self.exchange.fetch_balance()
+        # Force 'swap' to avoid SUSDT error
+        balance = await self.exchange.fetch_balance(params={'type': 'swap'})
         
         # Bitget Specifics:
         # 'free': Available for trade (Cross margin balance - frozen)
@@ -71,7 +72,7 @@ class ExchangeHandler:
     async def get_position(self, symbol):
         """Fetches the current open position for the symbol."""
         try:
-            positions = await self.exchange.fetch_positions([symbol])
+            positions = await self.exchange.fetch_positions([symbol], params={'productType': 'USDT-FUTURES'})
             # Filter for active positions (size > 0)
             target_pos = next((p for p in positions if p['symbol'] == symbol and float(p['contracts']) > 0), None)
             return target_pos
@@ -83,7 +84,8 @@ class ExchangeHandler:
         """Fetches ALL open positions from the exchange (for Status/Limit checks)."""
         try:
             # fetch_positions(None) or [] should return all for Bitget V2
-            positions = await self.exchange.fetch_positions()
+            # Force productType
+            positions = await self.exchange.fetch_positions(params={'productType': 'USDT-FUTURES'})
             
             # Filter for active positions (size > 0)
             active_pos = [p for p in positions if float(p['contracts']) > 0]
