@@ -5,7 +5,7 @@ from config import TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_CHANNEL_ID, NOTI
 from parser import parse_message
 from risk_manager import RiskManager
 from exchange_handler import ExchangeHandler
-from database import store_trade, get_trade_by_msg_id, update_trade_order_id, update_trade_sl, close_trade_db, get_open_trade_count, get_all_open_trades
+from database import store_trade, get_trade_by_msg_id, update_trade_order_id, update_trade_sl, close_trade_db, get_open_trade_count, get_all_open_trades, get_recent_trades
 from notifier import Notifier
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,9 @@ class TelegramListener:
                     return
                 elif text_upper in ["MARKET", "/MARKET"]:
                     await self.send_market_update()
+                    return
+                elif text_upper in ["DATABASE", "/DATABASE", "/DB", "DB"]:
+                    await self.send_database_records()
                     return
 
                 logger.info(f"Received DM from Admin. Processing as Mock Signal.")
@@ -516,4 +519,45 @@ class TelegramListener:
                 
             except Exception as e:
                 logger.error(f"Trade monitor error: {e}")
+
+    async def send_database_records(self):
+        """Sends the last 20 trades from the database."""
+        try:
+            trades = await get_recent_trades(20)
+            
+            if not trades:
+                await self.notifier.send("📭 Database is empty.")
+                return
+            
+            msg = "📚 **Database Records (Last 20)**\n\n"
+            
+            for t in trades:
+                status_icon = {
+                    "OPEN": "🟢",
+                    "CLOSED": "aaa",
+                    "MOCK": "🧪"
+                }.get(t['status'], "❓")
+                
+                # Format timestamp (assuming simple string or datetime)
+                ts = t['timestamp']
+                
+                msg += (
+                    f"{status_icon} **{t['symbol']}** ({t['status']})\n"
+                    f"   🆔 `{t['order_id']}`\n"
+                    f"   💰 Entry: {t['entry_price']} | SL: {t['sl_price']}\n"
+                    f"   📅 {ts}\n"
+                    f"   -------------------------\n"
+                )
+            
+            # Telegram has message length limits (4096 chars). 
+            # 20 records might fit, but safer to split if needed.
+            # strict split not implemented here for brevity, assuming standard usage.
+            if len(msg) > 4000:
+                msg = msg[:4000] + "\n...(truncated)"
+                
+            await self.notifier.send(msg)
+            
+        except Exception as e:
+            logger.error(f"DB Fetch failed: {e}")
+            await self.notifier.send(f"⚠️ Error fetching history: {e}")
 

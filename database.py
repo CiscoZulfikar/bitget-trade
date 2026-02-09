@@ -92,3 +92,23 @@ async def get_all_open_trades():
                     "timestamp": row["timestamp"]
                 })
             return trades
+
+async def get_recent_trades(limit=20):
+    """Get the last N trades."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute('SELECT * FROM trades ORDER BY timestamp DESC LIMIT ?', (limit,)) as cursor:
+            rows = await cursor.fetchall()
+            trades = []
+            for row in rows:
+                trades.append({
+                    "message_id": row["message_id"],
+                    "order_id": row["order_id"],
+                    "symbol": row["symbol"],
+                    "entry_price": row["entry_price"],
+                    "sl_price": row["sl_price"],
+                    "tp_price": row["tp_price"],
+                    "status": row["status"],
+                    "timestamp": row["timestamp"]
+                })
+            return trades
