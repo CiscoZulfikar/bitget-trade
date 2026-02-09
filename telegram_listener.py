@@ -383,18 +383,25 @@ class TelegramListener:
 
     async def periodic_status_task(self):
         """Sends status updates based on dynamic schedule."""
-        from datetime import datetime
+        from datetime import datetime, timezone, timedelta
         logger.info("Periodic Status Task Started.")
         
         while True:
             try:
-                now = datetime.now()
-                minute = now.minute
+                # Current Time (UTC)
+                now_utc = datetime.now(timezone.utc)
+                # Convert to WIB (UTC+7)
+                now_wib = now_utc + timedelta(hours=7)
                 
-                # Logic:
-                # xx:00 -> ALWAYS send
-                # xx:30 -> Send ONLY if open trades exist
+                minute = now_utc.minute
                 
+                # 1. Daily Market Overview at 07:00 WIB
+                if now_wib.hour == 7 and minute == 0:
+                    logger.info("Time is 07:00 WIB. Sending Daily Market Overview...")
+                    await self.send_market_update()
+                    # We continue to Status Check below
+                
+                # 2. Periodic Status Update
                 should_send = False
                 
                 if minute == 0:
@@ -413,9 +420,10 @@ class TelegramListener:
                 
             except Exception as e:
                 logger.error(f"Periodic task error: {e}")
+                await asyncio.sleep(60)
             
-            # Check every minute
-            await asyncio.sleep(60)
+            # Check every 50s to avoid skipping minutes
+            await asyncio.sleep(50)
 
     async def send_market_update(self):
         """Sends current prices for Top 8 Crypto + Metals."""
