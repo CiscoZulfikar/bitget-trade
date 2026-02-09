@@ -308,6 +308,7 @@ class TelegramListener:
             "• `STATUS`: Show Equity, Free Balance & Open Trades.\n"
             "• `CURRENT_TRADE`: List all open positions.\n"
             "• `MARKET`: Show Top 8 Crypto + Gold/Silver Prices.\n"
+            "• `DATABASE`: Show Last 20 Real Trades.\n"
             "\n"
             "**Mock Signals (DM Me):**\n"
             "• `LONG BTC ENTRY 90000 SL 89000`\n"

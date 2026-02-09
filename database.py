@@ -94,10 +94,10 @@ async def get_all_open_trades():
             return trades
 
 async def get_recent_trades(limit=20):
-    """Get the last N trades."""
+    """Get the last N trades (excluding MOCK)."""
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute('SELECT * FROM trades ORDER BY timestamp DESC LIMIT ?', (limit,)) as cursor:
+        async with db.execute('SELECT * FROM trades WHERE status != "MOCK" ORDER BY timestamp DESC LIMIT ?', (limit,)) as cursor:
             rows = await cursor.fetchall()
             trades = []
             for row in rows:
