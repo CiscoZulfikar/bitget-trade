@@ -167,6 +167,40 @@ class ExchangeHandler:
             logger.warning(f"Could not fetch SL/TP for {symbol}: {e}")
             return [], []
 
+    async def get_last_trade(self, symbol):
+        """Fetches the last closed trade for a symbol to determine PnL and Exit Price."""
+        try:
+            # Fetch last 5 trades to find the reducing one
+            # Use fetch_my_trades
+            trades = await self.exchange.fetch_my_trades(symbol, limit=5)
+            if trades:
+                # Sort by timestamp descending
+                trades.sort(key=lambda x: x['timestamp'], reverse=True)
+                return trades[0]
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching last trade for {symbol}: {e}")
+            return None
+
+    async def get_tickers(self, symbols):
+        """Fetches current prices for a list of symbols."""
+        try:
+            # fetch_tickers is efficient if supported
+            tickers = await self.exchange.fetch_tickers(symbols)
+            # Return dict {symbol: price}
+            return {s: t['last'] for s, t in tickers.items() if t.get('last')}
+        except Exception as e:
+            logger.error(f"Error fetching tickers: {e}")
+            # Fallback loop
+            results = {}
+            for s in symbols:
+                try:
+                    price = await self.get_market_price(s)
+                    results[s] = price
+                except:
+                    results[s] = 0.0
+            return results
+
     async def place_order(self, symbol, side, amount, leverage, sl_price=None, tp_price=None, price=None, order_type='market'):
         try:
             # Set leverage first

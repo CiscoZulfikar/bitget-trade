@@ -46,6 +46,9 @@ class TelegramListener:
                 elif text_upper in ["CURRENT_TRADE", "/TRADES", "TRADES", "POSITIONS", "/POSITIONS"]:
                     await self.send_open_trades()
                     return
+                elif text_upper in ["MARKET", "/MARKET"]:
+                    await self.send_market_update()
+                    return
 
                 logger.info(f"Received DM from Admin. Processing as Mock Signal.")
                 await self.process_message(event, is_mock_override=True)
@@ -61,6 +64,9 @@ class TelegramListener:
         # Start Periodic Status Update (30m)
         asyncio.create_task(self.periodic_status_task())
         
+        # Start Trade Monitor (Immediate Alerts)
+        asyncio.create_task(self.monitor_trade_updates())
+
         # We don't run_until_disconnected here anymore, main does it
 
 
@@ -301,10 +307,11 @@ class TelegramListener:
             "• `HELP`: Show this message.\n"
             "• `STATUS`: Show Equity, Free Balance & Open Trades.\n"
             "• `CURRENT_TRADE`: List all open positions.\n"
+            "• `MARKET`: Show Top 8 Crypto + Gold/Silver Prices.\n"
             "\n"
             "**Mock Signals (DM Me):**\n"
-            "`LONG BTC ENTRY 90000 SL 89000`\n"
-            "`LIMIT SHORT ETH ENTRY 3000 SL 3100`"
+            "• `LONG BTC ENTRY 90000 SL 89000`\n"
+            "• `LIMIT SHORT ETH ENTRY 3000 SL 3100`"
         )
         await self.notifier.send(help_text)
 
@@ -374,42 +381,125 @@ class TelegramListener:
         await self.notifier.send(msg)
 
     async def periodic_status_task(self):
-        """Runs exactly at xx:00 and xx:30."""
-        from datetime import datetime, timedelta
-
+        """Sends status updates based on dynamic schedule."""
+        from datetime import datetime
+        logger.info("Periodic Status Task Started.")
+        
         while True:
-            now = datetime.now()
-            # Calculate next target (0 or 30)
-            if now.minute < 30:
-                next_minute = 30
-            else:
-                next_minute = 0
-            
-            # Calculate target time
-            if next_minute == 0:
-                # Next hour
-                target = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
-            else:
-                # Same hour, 30 min
-                target = now.replace(minute=30, second=0, microsecond=0)
-            
-            sleep_seconds = (target - now).total_seconds()
-            
-            # Add a small buffer (e.g., 2 seconds) to ensure we are past the mark
-            sleep_seconds += 2
-            
-            logger.info(f"Next Status Update in {sleep_seconds/60:.2f} mins ({target.strftime('%H:%M')})")
-            
-            await asyncio.sleep(sleep_seconds)
-            
             try:
-                await self.send_status()
+                now = datetime.now()
+                minute = now.minute
                 
-                # Also send open positions details if any exist
-                positions = await self.exchange.get_all_positions()
-                if positions:
-                    await self.send_open_trades()
-                    
+                # Logic:
+                # xx:00 -> ALWAYS send
+                # xx:30 -> Send ONLY if open trades exist
+                
+                should_send = False
+                
+                if minute == 0:
+                    should_send = True
+                elif minute == 30:
+                    # check real positions
+                    positions = await self.exchange.get_all_positions()
+                    if len(positions) > 0:
+                        should_send = True
+                
+                if should_send:
+                    logger.info("Sending scheduled status update...")
+                    await self.send_status()
+                    # Sleep to avoid double send within the same minute
+                    await asyncio.sleep(60) 
+                
             except Exception as e:
-                logger.error(f"Periodic update failed: {e}")
+                logger.error(f"Periodic task error: {e}")
+            
+            # Check every minute
+            await asyncio.sleep(60)
+
+    async def send_market_update(self):
+        """Sends current prices for Top 8 Crypto + Metals."""
+        try:
+            targets = [
+                "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", 
+                "BNBUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", 
+                "XAUUSDT", "XAGUSDT"
+            ]
+            
+            prices = await self.exchange.get_tickers(targets)
+            
+            msg = "🌍 **Market Overview**\n\n"
+            msg += "**Crypto (Top 8):**\n"
+            for s in targets[:8]:
+                p = prices.get(s, 0.0)
+                msg += f"• {s.replace('USDT', '')}:  `${p:,.4f}`\n"
+                
+            msg += "\n**Metals:**\n"
+            for s in targets[8:]:
+                p = prices.get(s, 0.0)
+                msg += f"• {s.replace('USDT', '')}:  `${p:,.2f}`\n"
+                
+            await self.notifier.send(msg)
+            
+        except Exception as e:
+            logger.error(f"Market update failed: {e}")
+            await self.notifier.send(f"⚠️ Market update failed: {e}")
+
+    async def monitor_trade_updates(self):
+        """Polls for trade closures (SL/TP) every 60s."""
+        logger.info("Trade Monitor Task Started.")
+        last_positions = {}
+        
+        # Initial population
+        try:
+            initial_pos = await self.exchange.get_all_positions()
+            last_positions = {p['symbol']: p for p in initial_pos}
+        except:
+            pass
+            
+        while True:
+            try:
+                await asyncio.sleep(60) # Poll every 60s
+                
+                current_pos_list = await self.exchange.get_all_positions()
+                current_positions = {p['symbol']: p for p in current_pos_list}
+                
+                # Check for CLOSED positions (In last_positions but NOT in current_positions)
+                for symbol, old_pos in last_positions.items():
+                    if symbol not in current_positions:
+                        # Position Closed!
+                        logger.info(f"Detected closure for {symbol}. Fetching details...")
+                        
+                        # Fetch Last Trade to get PnL/Reason
+                        last_trade = await self.exchange.get_last_trade(symbol)
+                        
+                        if last_trade:
+                            price = float(last_trade['price'])
+                            # realisedPnl is often in the trade history
+                            pnl = 0.0
+                            if 'info' in last_trade and 'cRealizedPL' in last_trade['info']:
+                                pnl = float(last_trade['info']['cRealizedPL']) # Bitget V2 key?
+                            elif 'realizedPnl' in last_trade: # CCXT unified
+                                pnl = last_trade['realizedPnl']
+                                
+                            # Fallback if PnL is 0 or missing
+                            if pnl == 0 and 'info' in last_trade:
+                                # debug V2 keys: fillPx, fee, etc.
+                                pass
+
+                            icon = "🟢" if pnl >= 0 else "🔴"
+                            reason = "Take Profit 🎯" if pnl >= 0 else "Stop Loss 🛑"
+                            
+                            await self.notifier.send(
+                                f"🔔 **Position Closed: {symbol}**\n"
+                                f"{icon} **PnL:** ${pnl:.2f} ({reason})\n"
+                                f"📉 **Exit Price:** {price}\n"
+                            )
+                        else:
+                            await self.notifier.send(f"🔔 **Position Closed: {symbol}** (Details unavailable)")
+
+                # Update Cache
+                last_positions = current_positions
+                
+            except Exception as e:
+                logger.error(f"Trade monitor error: {e}")
 
