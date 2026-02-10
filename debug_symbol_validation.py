@@ -27,6 +27,13 @@ async def debug_validation():
         # Pre-load markets to ensure we don't hit rate limits in loop
         await handler.exchange.load_markets()
         print(f"Loaded {len(handler.exchange.markets)} markets.")
+
+        # DEBUG: Print exact keys for BONK and PEPE
+        print("\n--- Market Keys Debug ---")
+        for key in handler.exchange.markets.keys():
+            if "BONK" in key or "PEPE" in key:
+                print(f"Found Market Key: {key} -> ID: {handler.exchange.markets[key]['id']}")
+        print("-------------------------\n")
         
         for input_sym in test_cases:
             resolved = await handler.validate_symbol(input_sym)
