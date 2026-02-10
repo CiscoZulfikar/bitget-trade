@@ -26,6 +26,17 @@ A Python-based trading bot for Bitget USDT-M Futures (Linear Swaps). It listens 
   - **Graceful Shutdown**: Notifies via Telegram before stopping/restarting (`SIGTERM` handling).
   - **Startup Report**: Sends status and last channel message on boot.
 
+## ✨ New Features
+
+### 1. MOCK Command
+You can now simulate trades by adding `MOCK` to the start of your message.
+*   `MOCK LONG BTC ENTRY ...` -> **Simulation** (No order placed)
+*   `LONG BTC ENTRY ...` -> **Real Trade**
+
+### 2. Logging
+*   The bot now saves logs to `bot.log` in the project directory.
+*   "Execution failed" errors now report the exact reason (e.g., API errors, Balance issues).
+
 ## 🛠️ Setup
 
 1.  **Environment Variables**:
