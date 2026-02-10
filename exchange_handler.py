@@ -101,16 +101,40 @@ class ExchangeHandler:
         except Exception as e:
             logger.warning(f"Could not set leverage: {e}")
 
-    async def set_margin_mode(self, symbol):
+    async def ensure_hedge_mode(self, symbol):
         try:
-            # Force Hedge Mode (hold_side='long'/'short') because bot uses Close logic
-            # Bitget V2: setPositionMode
+            # Force Hedge Mode
             # hedged=True means Hedge Mode
             await self.exchange.set_position_mode(True, symbol)
         except Exception as e:
-            # 40789: Already in that mode is fine
-            if "40789" not in str(e):
-                logger.warning(f"Could not set Hedge Mode for {symbol}: {e}")
+            err_str = str(e)
+            # 40789: Already in that mode
+            if "40789" in err_str:
+                return
+            
+            # 400172: Has open positions/orders (Cannot switch)
+            # 43116: Generic 'condition not met' often for this too
+            logger.warning(f"Set Hedge Mode Failed: {e}")
+            
+            # We RAISE this so the bot tells the user via Telegram
+            # This explains WHY the subsequent trade would fail
+            raise Exception(f"Failed to set Hedge Mode. Close all active positions/orders for {symbol} on Bitget manually and try again. ({e})")
+
+    async def ensure_isolated_margin(self, symbol):
+        try:
+            # Force Isolated Margin
+            # Usually set_margin_mode('isolated', symbol)
+            # Check for existing mode first? CCXT might handle.
+            await self.exchange.set_margin_mode('isolated', symbol)
+        except Exception as e:
+             err_str = str(e)
+             # 40789: Already in that mode (Bitget might return this if already isolated)
+             if "40789" in err_str:
+                 return
+             logger.warning(f"Set Isolated Margin Failed: {e}")
+             # raising here might be strict, but user asked for it. 
+             # If it fails (e.g. open positions), we should probably fail the trade to avoid Cross margin mishaps.
+             raise Exception(f"Failed to set Isolated Margin. Close positions for {symbol} and try again. ({e})")
 
     async def get_active_tp_sl(self, symbol):
         """Fetches active SL and TP prices from open orders AND plan orders (Supports Partial TPs)."""
@@ -261,13 +285,21 @@ class ExchangeHandler:
             return {s: {'last': 0.0, 'percentage': 0.0, 'daily_pct': 0.0} for s in symbols}
 
     async def place_order(self, symbol, side, amount, leverage, sl_price=None, tp_price=None, price=None, order_type='market'):
-        # 1. Ensure Hedge Mode
-        await self.set_margin_mode(symbol)
+        # 1. Ensure Hedge Mode & Isolated Margin
+        await self.ensure_hedge_mode(symbol)
+        await self.ensure_isolated_margin(symbol)
         
         # 2. Set leverage
         await self.set_leverage(symbol, leverage)
         
         params = {}
+        # Explicitly set posSide for Hedge Mode (Bitget V2 Requirement)
+        # matches side because place_order is for OPENING positions
+        if side == 'buy':
+            params['posSide'] = 'long' 
+        else:
+            params['posSide'] = 'short'
+
         if sl_price:
             params['stopLoss'] = {
                 'triggerPrice': sl_price,
