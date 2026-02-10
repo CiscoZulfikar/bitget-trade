@@ -299,6 +299,14 @@ class ExchangeHandler:
             params['posSide'] = 'long' 
         else:
             params['posSide'] = 'short'
+        
+        # Explicitly set tradeSide to 'open' to avoid ambiguity
+        params['tradeSide'] = 'open' 
+        
+        # Ensure marginMode is passed if needed (though account setting should prevail)
+        params['marginMode'] = 'isolated' 
+
+        logger.info(f"DEBUG: Params for {symbol} {side}: {params}")
 
         if sl_price:
             params['stopLoss'] = {
