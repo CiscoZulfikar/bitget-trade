@@ -1,6 +1,7 @@
 
 import asyncio
 import logging
+import json
 from exchange_handler import ExchangeHandler
 
 # Configure logging
@@ -14,31 +15,28 @@ async def check_mode():
     try:
         print(f"--- Checking Mode for {symbol} ---")
         
-        # 1. Fetch Position Mode
-        # CCXT uses privateMixGetV2MixAccountAccountAccount to get margin/pos mode often
-        # Or implicit
-        try:
-            mode = await exchange.exchange.fetch_position_mode(symbol)
-            print(f"Current Mode (CCXT): {mode}")
-        except Exception as e:
-            print(f"CCXT fetch_position_mode failed: {e}")
-
-        # 2. Try Raw API check if needed
-        # (CCXT usually reliable for this)
+        # 1. Fetch Account Info (Raw Bitget V2)
+        # /api/v2/mix/account/account
+        params = {
+            "productType": "USDT-FUTURES",
+            "symbol": symbol,
+            "marginCoin": "USDT"
+        }
         
-        print("\n--- Attempting to Set Hedge Mode (True) ---")
         try:
-            resp = await exchange.exchange.set_position_mode(True, symbol)
-            print(f"Set Hedge Mode Result: {resp}")
+            # CCXT Implicit Method for /api/v2/mix/account/account
+            # Try different variations just in case
+            if hasattr(exchange.exchange, 'privateMixGetV2MixAccountAccount'):
+                res = await exchange.exchange.privateMixGetV2MixAccountAccount(params)
+                print(f"Account Info (privateMixGetV2MixAccountAccount): {json.dumps(res, indent=2)}")
+            elif hasattr(exchange.exchange, 'private_mix_get_v2_mix_account_account'):
+                res = await exchange.exchange.private_mix_get_v2_mix_account_account(params)
+                print(f"Account Info (private_mix_get_v2_mix_account_account): {json.dumps(res, indent=2)}")
+            else:
+                 print("CCXT implicit methods not found. Trying fetch_balance as proxy.")
+                 
         except Exception as e:
-            print(f"Set Hedge Mode Failed: {e}")
-
-        print("\n--- Re-Checking Mode ---")
-        try:
-            mode = await exchange.exchange.fetch_position_mode(symbol)
-            print(f"Current Mode (CCXT): {mode}")
-        except Exception as e:
-            print(f"CCXT fetch_position_mode failed: {e}")
+            print(f"Raw Check Failed: {e}")
 
     except Exception as e:
         print(f"General Error: {e}")
