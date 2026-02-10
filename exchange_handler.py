@@ -353,27 +353,67 @@ class ExchangeHandler:
             return False
 
     async def update_sl(self, symbol, order_id, new_sl):
-        # Bitget V2 SL update
-        # Manual Sync check not strictly needed for just SL update unless we want to verify position exists
         try:
-            target_pos = await self.get_position(symbol)
-            if not target_pos:
-                logger.warning(f"Cannot update SL for {symbol}. No open position found.")
+            # 1. Get current position to know side (long/short)
+            position = await self.get_position(symbol)
+            if not position:
+                logger.warning(f"Cannot update SL for {symbol}: No active position.")
                 return False
 
-            # Bitget specific: update TPSL for position
-            # verify CCXT method for 'setPositionMode' or specific edit/algo params
-            # Standard CCXT way for some exchanges is create_order with params
-            # For Bitget, often easier to cancel old SL orders and place new or use specific implicit API
-            # For this V2, we will assume a generic "edit_order" or log warning if complex
+            side = position['side'] # 'long' or 'short'
             
-            # Note: CCXT Bitget implementation details for SL update on existing position:
-            # Often requires cancelling existing plan order and creating new one.
-            # We will use the 'position' param if available or log for user to check docs for specific algo-edit.
-            logger.info(f"Request to update SL {symbol} to {new_sl}. (Exchange specific algo-edit needed)")
-            
-            return True
-            
+            # 2. Cancel Existing SL Orders (Plan Orders)
+            # Use Raw API to find and cancel 'loss_plan' orders
+            try:
+                if hasattr(self.exchange, 'privateMixGetV2MixOrderOrdersPlanPending'):
+                    # Sanitize Symbol
+                    raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
+                    params = {
+                        "symbol": raw_symbol,
+                        "productType": "USDT-FUTURES", 
+                        "planType": "loss_plan"
+                    }
+                    resp = await self.exchange.privateMixGetV2MixOrderOrdersPlanPending(params)
+                    
+                    if resp['code'] == '00000' and 'entrustedList' in resp['data']:
+                        for o in resp['data']['entrustedList']:
+                             oid = o['orderId']
+                             # Cancel
+                             cancel_params = {
+                                 "symbol": raw_symbol,
+                                 "productType": "USDT-FUTURES", 
+                                 "orderId": oid,
+                                 "planType": "loss_plan"
+                             }
+                             await self.exchange.privateMixPostV2MixOrderCancelPlanOrder(cancel_params)
+                             logger.info(f"Cancelled old SL order {oid} for {symbol}")
+            except Exception as e:
+                logger.warning(f"Error cancelling old SLs: {e}")
+
+            # 3. Place New SL (TPSL Order for Position)
+            try:
+                raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
+                req = {
+                    "symbol": raw_symbol,
+                    "productType": "USDT-FUTURES",
+                    "marginCoin": "USDT",
+                    "planType": "loss_plan",
+                    "triggerPrice": str(new_sl),
+                    "triggerType": "market_price",
+                    "holdSide": side # long/short
+                }
+                res = await self.exchange.privateMixPostV2MixOrderPlaceTPSL(req)
+                
+                if res['code'] == '00000':
+                    logger.info(f"Updated SL for {symbol} to {new_sl} (ID: {res['data']['orderId']})")
+                    return True
+                else:
+                     logger.error(f"Failed to place new SL: {res}")
+                     return False
+            except Exception as e:
+                logger.error(f"Failed to execute PlaceTPSL: {e}")
+                return False
+
         except Exception as e:
             logger.error(f"Update SL failed: {e}")
             return False
