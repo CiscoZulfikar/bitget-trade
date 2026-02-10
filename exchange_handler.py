@@ -249,37 +249,33 @@ class ExchangeHandler:
             return {s: {'last': 0.0, 'percentage': 0.0, 'daily_pct': 0.0} for s in symbols}
 
     async def place_order(self, symbol, side, amount, leverage, sl_price=None, tp_price=None, price=None, order_type='market'):
-        try:
-            # Set leverage first
-            await self.set_leverage(symbol, leverage)
+        # Set leverage first
+        await self.set_leverage(symbol, leverage)
+        
+        params = {}
+        if sl_price:
+            params['stopLoss'] = {
+                'triggerPrice': sl_price,
+                'type': 'market' 
+            }
+        if tp_price:
+            params['takeProfit'] = {
+                'triggerPrice': tp_price,
+                'type': 'market'
+            }
+        
+        if order_type.lower() == 'limit':
+            if not price:
+                logger.error("Limit order requested but no price provided.")
+                return None
+            logger.info(f"Placing LIMIT {side} on {symbol} at {price}")
+            order = await self.exchange.create_order(symbol, 'limit', side, amount, price, params=params)
+        else:
+            # Market
+            logger.info(f"Placing MARKET {side} on {symbol}")
+            order = await self.exchange.create_order(symbol, 'market', side, amount, params=params)
             
-            params = {}
-            if sl_price:
-                params['stopLoss'] = {
-                    'triggerPrice': sl_price,
-                    'type': 'market' 
-                }
-            if tp_price:
-                params['takeProfit'] = {
-                    'triggerPrice': tp_price,
-                    'type': 'market'
-                }
-            
-            if order_type.lower() == 'limit':
-                if not price:
-                    logger.error("Limit order requested but no price provided.")
-                    return None
-                logger.info(f"Placing LIMIT {side} on {symbol} at {price}")
-                order = await self.exchange.create_order(symbol, 'limit', side, amount, price, params=params)
-            else:
-                # Market
-                logger.info(f"Placing MARKET {side} on {symbol}")
-                order = await self.exchange.create_order(symbol, 'market', side, amount, params=params)
-                
-            return order
-        except Exception as e:
-            logger.error(f"Order placement failed: {e}")
-            return None
+        return order
 
     async def close_position(self, symbol):
         """Closes the entire position for a symbol, SYNCING with actual size first."""

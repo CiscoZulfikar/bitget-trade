@@ -8,10 +8,23 @@ from telegram_listener import TelegramListener
 from notifier import Notifier
 from keep_alive import keep_alive_task
 
+from logging.handlers import RotatingFileHandler
+
 # Configure logging
+# Create handlers
+c_handler = logging.StreamHandler()
+f_handler = RotatingFileHandler('bot.log', maxBytes=5*1024*1024, backupCount=2)
+
+# Create formatters and add it to handlers
+c_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+f_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+c_handler.setFormatter(c_format)
+f_handler.setFormatter(f_format)
+
+# Add handlers to the logger
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.INFO,
+    handlers=[c_handler, f_handler]
 )
 
 logger = logging.getLogger(__name__)

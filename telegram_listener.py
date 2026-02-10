@@ -214,13 +214,18 @@ class TelegramListener:
         side = 'buy' if direction.upper() == 'LONG' else 'sell'
         logger.info(f"Placing {action} {direction} on {symbol} x{leverage}. SL: {sl_price}")
         
-        order = await self.exchange.place_order(symbol, side, amount, leverage, sl_price=sl_price, price=exec_price if action == 'LIMIT' else None, order_type=action)
-        
-        if order:
-            await store_trade(msg_id, order['id'], symbol, entry_price, sl_price, status="OPEN")
-            await self.notifier.send(f"🟢 {action} Order Opened: {symbol} at {exec_price} with {leverage}x.\nReason: {reason}")
-        else:
-            await self.notifier.send(f"⚠️ execution failed for {symbol}")
+        try:
+            order = await self.exchange.place_order(symbol, side, amount, leverage, sl_price=sl_price, price=exec_price if action == 'LIMIT' else None, order_type=action)
+            
+            if order:
+                await store_trade(msg_id, order['id'], symbol, entry_price, sl_price, status="OPEN")
+                await self.notifier.send(f"🟢 {action} Order Opened: {symbol} at {exec_price} with {leverage}x.\nReason: {reason}")
+            else:
+                # Should not happen if place_order raises on error, but handled for safety
+                await self.notifier.send(f"⚠️ Execution failed for {symbol} (Unknown reason/None returned).")
+        except Exception as e:
+            logger.error(f"Execution failed for {symbol}: {e}")
+            await self.notifier.send(f"⚠️ Execution failed for {symbol}:\n`{str(e)}`")
 
     async def handle_update(self, msg_id, data, reply_msg_id=None, is_mock=False):
         # 1. Try to get symbol from Parser (if specific coin mentioned)
