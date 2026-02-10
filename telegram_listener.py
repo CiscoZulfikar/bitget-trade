@@ -102,6 +102,14 @@ class TelegramListener:
         reply_msg = await event.get_reply_message()
         reply_context = reply_msg.message if reply_msg else ""
         
+        # Explicit MOCK Command
+        if text.lstrip().upper().startswith("MOCK"):
+            is_mock = True
+            # Strip "MOCK" from text so parser works
+            # "MOCK LONG BTC..." -> "LONG BTC..."
+            text = text.lstrip()[4:].strip()
+            logger.info(f"Explicit MOCK command detected. Forced Mock Mode.")
+        
         log_prefix = "[MOCK] " if is_mock else ""
         logger.info(f"{log_prefix}Processing message {msg_id} (Edit: {is_edit}): {text[:50]}...")
 
@@ -316,7 +324,8 @@ class TelegramListener:
             "• `DATABASE`: Show Last 20 Real Trades.\n"
             "\n"
             "**Mock Signals (DM Me):**\n"
-            "• `LONG BTC ENTRY 90000 SL 89000`\n"
+            "• `LONG BTC ENTRY ...` -> **Real Trade**\n"
+            "• `MOCK LONG BTC ENTRY ...` -> **Simulation Only**\n"
             "• `LIMIT SHORT ETH ENTRY 3000 SL 3100`"
         )
         await self.notifier.send(help_text)
