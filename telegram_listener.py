@@ -278,8 +278,36 @@ class TelegramListener:
 
         if action == "MOVE_SL":
             new_sl = data['value']
-            market_price = await self.exchange.get_market_price(symbol)
-            new_sl = self.risk_manager.scale_price(new_sl, market_price)
+            
+            # Handle Special String Values (ENTRY, BE, LIQ)
+            if isinstance(new_sl, str):
+                new_sl_upper = new_sl.upper()
+                if new_sl_upper in ["ENTRY", "BE", "BREAKEVEN", "LIQ", "LIQUIDATION"]:
+                     # Need active position data to resolve this
+                     position = await self.exchange.get_position(symbol)
+                     if not position:
+                         await self.notifier.send(f"⚠️ Cannot move SL to {new_sl_upper}: No active position found for {symbol}.")
+                         return
+
+                     if new_sl_upper in ["ENTRY", "BE", "BREAKEVEN"]:
+                         # Set to Entry Price
+                         real_entry = float(position['entryPrice'])
+                         new_sl = real_entry
+                         
+                     elif new_sl_upper in ["LIQ", "LIQUIDATION"]:
+                         # Set to Liquidation Price
+                         liq_price = float(position['liquidationPrice'])
+                         if liq_price <= 0:
+                             await self.notifier.send(f"⚠️ Cannot move SL to Liq: Liquidation price is 0 or invalid.")
+                             return
+                         new_sl = liq_price
+            
+            # If new_sl is purely numeric (or resolved to number above)
+            # Scale it (if it was a raw number, e.g. "SL 69000", verify it fits order of magnitude)
+            if not isinstance(data['value'], str) or (isinstance(data['value'], str) and data['value'].upper() not in ["ENTRY", "BE", "LIQ", "BREAKEVEN", "LIQUIDATION"]):
+                 # Only scale if it came from the Signal (raw number)
+                 market_price = await self.exchange.get_market_price(symbol)
+                 new_sl = self.risk_manager.scale_price(new_sl, market_price)
             
             await self.exchange.update_sl(symbol, order_id, new_sl)
             await update_trade_sl(trade['message_id'], new_sl)
@@ -288,17 +316,35 @@ class TelegramListener:
         elif action in ["CLOSE_FULL", "BOOK_R"]:
             if action == "BOOK_R" and data.get('value'):
                 r_multiple = data['value']
-                # (R logic calculation omitted for brevity, same as before)
                 logger.info(f"Booking {r_multiple}R.")
             
             success = await self.exchange.close_position(symbol)
             
             if success:
-                await close_trade_db(trade['message_id'])
+                # Fetch details for DB persistence
+                last_trade = await self.exchange.get_last_trade(symbol)
+                final_price = 0.0
+                realized_pnl = 0.0
+                
+                if last_trade:
+                    final_price = float(last_trade.get('price', 0.0))
+                    # Try to get PnL
+                    if 'info' in last_trade and 'cRealizedPL' in last_trade['info']:
+                        realized_pnl = float(last_trade['info']['cRealizedPL'])
+                    elif 'realizedPnl' in last_trade:
+                         realized_pnl = float(last_trade['realizedPnl'] or 0.0)
+
+                await close_trade_db(trade['message_id'], exit_price=final_price, pnl=realized_pnl)
+                
                 current_price = await self.exchange.get_market_price(symbol)
+                display_price = final_price if final_price > 0 else current_price
+                
                 bal_data = await self.exchange.get_balance()
                 new_equity = bal_data['equity']
-                await self.notifier.send(f"🔴 Trade Closed: {symbol} at {current_price}. Equity: ${new_equity:.2f}.")
+                
+                reason_str = f"Take Profit ({realized_pnl} PnL)" if realized_pnl >= 0 else f"Stop Loss ({realized_pnl} PnL)"
+                
+                await self.notifier.send(f"🔴 Trade Closed: {symbol} at {display_price}. Equity: ${new_equity:.2f}.\n{reason_str}")
             else:
                 await self.notifier.send(f"⚠️ Failed to close (or no position for) {symbol}.")
 

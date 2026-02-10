@@ -16,19 +16,39 @@ async def init_db():
                 sl_price REAL,
                 tp_price REAL,
                 status TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                exit_price REAL,
+                pnl REAL,
+                timestamp DATETIME
             )
         ''')
+        # Migrations
+        try:
+            await db.execute('ALTER TABLE trades ADD COLUMN exit_price REAL')
+        except:
+            pass
+        try:
+            await db.execute('ALTER TABLE trades ADD COLUMN pnl REAL')
+        except:
+            pass
+        try:
+            await db.execute('ALTER TABLE trades ADD COLUMN timestamp DATETIME')
+        except:
+            pass
         await db.commit()
     logger.info("Database initialized.")
 
 async def store_trade(message_id, order_id, symbol, entry_price, sl_price, tp_price=None, status="OPEN"):
-    """Store a new trade."""
+    """Store a new trade with WIB timestamp."""
+    # Current Time (UTC) -> WIB (UTC+7)
+    from datetime import datetime, timezone, timedelta
+    now_utc = datetime.now(timezone.utc)
+    now_wib = now_utc + timedelta(hours=7)
+    
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute('''
-            INSERT INTO trades (message_id, order_id, symbol, entry_price, sl_price, tp_price, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (message_id, order_id, symbol, entry_price, sl_price, tp_price, status))
+            INSERT INTO trades (message_id, order_id, symbol, entry_price, sl_price, tp_price, status, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (message_id, order_id, symbol, entry_price, sl_price, tp_price, status, now_wib))
         await db.commit()
 
 async def get_trade_by_msg_id(message_id):
@@ -37,6 +57,10 @@ async def get_trade_by_msg_id(message_id):
         async with db.execute('SELECT * FROM trades WHERE message_id = ?', (message_id,)) as cursor:
             row = await cursor.fetchone()
             if row:
+                # Handle varying schema if robust columns managed by row_factory or index
+                # Basic fetch with index might be risky if columns added in middle, but we appended.
+                # Safer to use row_factory or access by index assuming append.
+                # Schema: msg_id, order_id, symbol, entry, sl, tp, status, exit, pnl, timestamp
                 return {
                     "message_id": row[0],
                     "order_id": row[1],
@@ -45,6 +69,7 @@ async def get_trade_by_msg_id(message_id):
                     "sl_price": row[4],
                     "tp_price": row[5],
                     "status": row[6]
+                    # We can add others but existing consumers might not need them yet
                 }
             return None
 
@@ -60,10 +85,10 @@ async def update_trade_sl(message_id, sl_price):
         await db.execute('UPDATE trades SET sl_price = ? WHERE message_id = ?', (sl_price, message_id))
         await db.commit()
         
-async def close_trade_db(message_id):
-    """Mark a trade as CLOSED in the DB."""
+async def close_trade_db(message_id, exit_price=0.0, pnl=0.0):
+    """Mark a trade as CLOSED in the DB with PnL data."""
     async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute('UPDATE trades SET status = "CLOSED" WHERE message_id = ?', (message_id,))
+        await db.execute('UPDATE trades SET status = "CLOSED", exit_price = ?, pnl = ? WHERE message_id = ?', (exit_price, pnl, message_id))
         await db.commit()
 
 async def get_open_trade_count():

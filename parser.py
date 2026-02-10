@@ -37,7 +37,7 @@ If UPDATE (e.g., "Booked 1R", "Booked 2.5R", "Move SL to Entry", "Close Half", "
   "type": "UPDATE",
   "symbol": "BTCUSDT", (Optional. If not in message, INFER from context/reply chain. Strip #/$)
   "action": "MOVE_SL" or "CLOSE_FULL" or "CLOSE_PARTIAL" or "BOOK_R",
-  "value": float (e.g. new SL price, or the R multiple number if Booking R),
+  "value": float OR string ("ENTRY", "BE", "LIQ") if applicable,
   "raw_text": "original text segment"
 }}
 
@@ -48,9 +48,10 @@ If IGNORE (news, fluff, marketing):
 
 Rules:
 1. If "Booked 1R", action is BOOK_R, value is 1.
-2. If "Booked 0.5R", action is BOOK_R, value is 0.5.
-3. "Move SL to Entry" means new SL = original Entry.
-4. Handle loose formatting.
+2. If "Move SL to Entry" or "SL to BE" or "Breakeven", action is MOVE_SL, value is "ENTRY".
+3. If "SL to Liquidation" or "SL Liq", action is MOVE_SL, value is "LIQ".
+4. If "SL 69000", action is MOVE_SL, value is 69000.
+5. Handle loose formatting.
 """
 
 async def parse_message(message_text, reply_context=""):
