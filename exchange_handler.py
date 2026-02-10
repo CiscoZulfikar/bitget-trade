@@ -305,30 +305,49 @@ class ExchangeHandler:
             if not self.exchange.markets:
                 await self.exchange.load_markets()
                 
-            # Check against loaded markets (keys are usually 'BTC/USDT:USDT')
-            # standardized dict keys usually format as 'BTC/USDT:USDT'
-            # We also have the raw 'id' field which matches the API symbol
+            # Filter for USDT Futures (Linear Swap) ONLY
+            # We want to ignore Spot markets (e.g. BONK/USDT) so we find 1000BONK/USDT:USDT
+            futures_markets = [
+                m for m in self.exchange.markets.values() 
+                if m.get('swap') and m.get('linear') and m.get('quote') == 'USDT'
+            ]
             
-            # Create a map of ID -> Market
-            market_ids = {m['id']: m for m in self.exchange.markets.values()}
+            # Map IDs and Symbols for easy lookup
+            # Key = ID (e.g. 1000BONKUSDT), Value = Market
+            futures_map = {m['id']: m for m in futures_markets}
             
             for sym in potential_symbols:
-                # Check directly in market IDs (Bitget IDs are usually like 'BTCUSDT_UMCBL')
-                # But CCXT might use 'BTCUSDT' as id or 'BTCUSDT_UMCBL'
-                # Let's fuzzy match the ID
+                # 1. Check strict ID match in Futures list
+                # Bitget IDs: 1000BONKUSDT, BTCUSDT
+                if sym in futures_map:
+                    return sym
+                    
+                # 2. Check CCXT Symbol match (e.g. 1000BONK/USDT:USDT)
+                # Construct CCXT-style symbol from potential (e.g. 1000BONKUSDT -> 1000BONK/USDT:USDT)
+                # Base is sym - USDT
+                s_base = sym.replace("USDT", "")
+                ccxt_target = f"{s_base}/USDT:USDT"
                 
-                # 1. Exact match in CCXT Symbols
-                # CCXT symbol '1000BONK/USDT:USDT' -> ID '1000BONKUSDT_UMCBL' (usually)
-                
-                # Check standard CCXT symbols
-                ccxt_target = f"{sym.replace('USDT', '')}/USDT:USDT"
+                # Check if this constructed key exists in the loaded markets (and is a future)
                 if ccxt_target in self.exchange.markets:
-                    return self.exchange.markets[ccxt_target]['id'] # Return the API ID (e.g. 1000BONKUSDT)
+                    m = self.exchange.markets[ccxt_target]
+                    if m.get('swap') and m.get('linear'):
+                        return m['id']
                 
-                # 2. Check strict ID match (ignoring _UMCBL suffix if present)
-                for mid in market_ids.keys():
-                    if mid.startswith(sym):
-                        return mid
+                # 3. Fuzzy ID match (startswith)
+                for mid in futures_map.keys():
+                     if mid == sym: # Exact match already checked above, but safe to keep
+                         return mid
+            
+            # If still no match, try searching the futures list for the base + 1000 prefix logic specifically
+            # e.g. input BONK -> check if 1000BONKUSDT exists in futures_map
+            if "1000" not in base:
+                 memecoin_sym = f"1000{base}USDT"
+                 if memecoin_sym in futures_map:
+                     return memecoin_sym
+            
+            # If no match found, standard fallback but it might be invalid if it's a spot symbol
+            return f"{base}USDT"
                         
             # If no match found, standard fallback
             return f"{base}USDT"
