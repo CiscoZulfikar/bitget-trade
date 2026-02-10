@@ -553,21 +553,17 @@ class TelegramListener:
                         
                         # Fetch Last Trade to get PnL/Reason
                         last_trade = await self.exchange.get_last_trade(symbol)
+                        price = 0.0
+                        pnl = 0.0
                         
                         if last_trade:
-                            price = float(last_trade['price'])
+                            price = float(last_trade.get('price', 0.0))
                             # realisedPnl is often in the trade history
-                            pnl = 0.0
                             if 'info' in last_trade and 'cRealizedPL' in last_trade['info']:
                                 pnl = float(last_trade['info']['cRealizedPL']) # Bitget V2 key?
                             elif 'realizedPnl' in last_trade: # CCXT unified
-                                pnl = last_trade['realizedPnl']
+                                pnl = float(last_trade['realizedPnl'] or 0.0)
                                 
-                            # Fallback if PnL is 0 or missing
-                            if pnl == 0 and 'info' in last_trade:
-                                # debug V2 keys: fillPx, fee, etc.
-                                pass
-
                             icon = "🟢" if pnl >= 0 else "🔴"
                             reason = "Take Profit 🎯" if pnl >= 0 else "Stop Loss 🛑"
                             
@@ -578,6 +574,22 @@ class TelegramListener:
                             )
                         else:
                             await self.notifier.send(f"🔔 **Position Closed: {symbol}** (Details unavailable)")
+
+                        # --- DB UPDATE FIX ---
+                        # Update DB status to CLOSED even if manual/external close
+                        try:
+                            open_trades = await get_all_open_trades()
+                            # Find the trade for this symbol
+                            # We might have multiple if bugged, but usually one OPEN per symbol
+                            target_trade = next((t for t in open_trades if t['symbol'] == symbol), None)
+                            
+                            if target_trade:
+                                await close_trade_db(target_trade['message_id'], exit_price=price, pnl=pnl)
+                                logger.info(f"DB Update: Marked {symbol} (Msg {target_trade['message_id']}) as CLOSED.")
+                            else:
+                                logger.warning(f"Could not find OPEN trade in DB for {symbol} to close.")
+                        except Exception as db_e:
+                            logger.error(f"Failed to update DB on manual close: {db_e}")
 
                 # Update Cache
                 last_positions = current_positions
@@ -599,24 +611,35 @@ class TelegramListener:
             for t in trades:
                 status_icon = {
                     "OPEN": "🟢",
-                    "CLOSED": "aaa",
+                    "CLOSED": "aaa", # Keep same icon? Maybe 🔴 or 🏁
                     "MOCK": "🧪"
                 }.get(t['status'], "❓")
+                if t['status'] == "CLOSED": status_icon = "🔴"
                 
-                # Format timestamp (assuming simple string or datetime)
-                ts = t['timestamp']
+                # Format timestamp
+                # Input: "2026-02-10 13:13:00.245070+00:00" or similar
+                # Desired: "13:13:00 WIB"
+                raw_ts = str(t['timestamp'])
+                try:
+                    # Quick robust parsing: Split by space, take time part, remove ms/+
+                    # "2026-02-10 13:13:00.245070+00:00" -> "13:13:00.245070+00:00"
+                    time_part = raw_ts.split(' ')[1] 
+                    # Remove potential +OFFSET
+                    time_part = time_part.split('+')[0]
+                    # Remove milliseconds
+                    time_part = time_part.split('.')[0]
+                    ts_display = f"{time_part} WIB"
+                except:
+                    ts_display = raw_ts # Fallback
                 
                 msg += (
                     f"{status_icon} **{t['symbol']}** ({t['status']})\n"
                     f"   🆔 `{t['order_id']}`\n"
                     f"   💰 Entry: {t['entry_price']} | SL: {t['sl_price']}\n"
-                    f"   📅 {ts}\n"
+                    f"   📅 {ts_display}\n"
                     f"   -------------------------\n"
                 )
             
-            # Telegram has message length limits (4096 chars). 
-            # 20 records might fit, but safer to split if needed.
-            # strict split not implemented here for brevity, assuming standard usage.
             if len(msg) > 4000:
                 msg = msg[:4000] + "\n...(truncated)"
                 

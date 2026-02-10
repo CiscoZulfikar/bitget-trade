@@ -41,14 +41,19 @@ async def store_trade(message_id, order_id, symbol, entry_price, sl_price, tp_pr
     """Store a new trade with WIB timestamp."""
     # Current Time (UTC) -> WIB (UTC+7)
     from datetime import datetime, timezone, timedelta
-    now_utc = datetime.now(timezone.utc)
-    now_wib = now_utc + timedelta(hours=7)
+    
+    # Correct way to get WIB time
+    tz_wib = timezone(timedelta(hours=7))
+    now_wib = datetime.now(timezone.utc).astimezone(tz_wib)
+    
+    # Store as string "YYYY-MM-DD HH:MM:SS" (Naive-like but correct Time)
+    ts_str = now_wib.strftime('%Y-%m-%d %H:%M:%S')
     
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute('''
             INSERT INTO trades (message_id, order_id, symbol, entry_price, sl_price, tp_price, status, timestamp)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (message_id, order_id, symbol, entry_price, sl_price, tp_price, status, now_wib))
+        ''', (message_id, order_id, symbol, entry_price, sl_price, tp_price, status, ts_str))
         await db.commit()
 
 async def get_trade_by_msg_id(message_id):
