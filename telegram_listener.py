@@ -53,8 +53,8 @@ class TelegramListener:
                     await self.send_database_records()
                     return
 
-                logger.info(f"Received DM from Admin. Processing as Mock Signal.")
-                await self.process_message(event, is_mock_override=True)
+                logger.info(f"Received DM from Admin. Processing Signal.")
+                await self.process_message(event, is_mock_override=False)
 
         logger.info(f"Listener attached to channel {self.channel_id} and Bot DMs...")
         
@@ -90,14 +90,8 @@ class TelegramListener:
         sender_id = event.sender_id
         
         # Mock Mode Detection
-        # If explicitly overridden (DM) OR sender is the User (me), we treat it as a test/mock
+        # Default to False unless overridden or MOCK prefix used
         is_mock = is_mock_override
-        if not is_mock:
-            try:
-                if isinstance(NOTIFICATION_USER_ID, int) and sender_id == NOTIFICATION_USER_ID:
-                    is_mock = True
-            except:
-                pass
             
         reply_msg = await event.get_reply_message()
         reply_context = reply_msg.message if reply_msg else ""
@@ -323,7 +317,7 @@ class TelegramListener:
             "• `MARKET`: Show Top 8 Crypto + Gold/Silver Prices.\n"
             "• `DATABASE`: Show Last 20 Real Trades.\n"
             "\n"
-            "**Mock Signals (DM Me):**\n"
+            "**Signals (DM Me):**\n"
             "• `LONG BTC ENTRY ...` -> **Real Trade**\n"
             "• `MOCK LONG BTC ENTRY ...` -> **Simulation Only**\n"
             "• `LIMIT SHORT ETH ENTRY 3000 SL 3100`"
