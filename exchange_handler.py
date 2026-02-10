@@ -96,9 +96,21 @@ class ExchangeHandler:
 
     async def set_leverage(self, symbol, leverage):
         try:
+            # Set Leverage
             await self.exchange.set_leverage(leverage, symbol)
         except Exception as e:
             logger.warning(f"Could not set leverage: {e}")
+
+    async def set_margin_mode(self, symbol):
+        try:
+            # Force Hedge Mode (hold_side='long'/'short') because bot uses Close logic
+            # Bitget V2: setPositionMode
+            # hedged=True means Hedge Mode
+            await self.exchange.set_position_mode(True, symbol)
+        except Exception as e:
+            # 40789: Already in that mode is fine
+            if "40789" not in str(e):
+                logger.warning(f"Could not set Hedge Mode for {symbol}: {e}")
 
     async def get_active_tp_sl(self, symbol):
         """Fetches active SL and TP prices from open orders AND plan orders (Supports Partial TPs)."""
@@ -249,7 +261,10 @@ class ExchangeHandler:
             return {s: {'last': 0.0, 'percentage': 0.0, 'daily_pct': 0.0} for s in symbols}
 
     async def place_order(self, symbol, side, amount, leverage, sl_price=None, tp_price=None, price=None, order_type='market'):
-        # Set leverage first
+        # 1. Ensure Hedge Mode
+        await self.set_margin_mode(symbol)
+        
+        # 2. Set leverage
         await self.set_leverage(symbol, leverage)
         
         params = {}
