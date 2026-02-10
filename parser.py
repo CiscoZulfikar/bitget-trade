@@ -26,8 +26,8 @@ If TRADE_CALL:
   "symbol": "BTCUSDT", (Strip '#' or '$'. Always uppercase.)
   "direction": "LONG" or "SHORT",
   "entry": float,
-  "sl": float,
-  "tp": [float, float...] (optional list),
+  "sl": float (Look for 'SL', 'STOP LOSS', 'STOP', 'INVALIDATION', '❌'),
+  "tp": [float, float...] (Take Profit levels. Look for 'TP', 'TARGET', 'T1', 'T2', 'TAKE PROFIT', '🎯'),
   "leverage": float (optional, if specified),
   "order_type": "MARKET" or "LIMIT" (Default to MARKET unless "LIMIT" is explicitly mentioned in text)
 }}
@@ -38,7 +38,7 @@ If UPDATE (e.g., "Booked 1R", "Booked 2.5R", "Move SL to Entry", "Close Half", "
   "symbol": "BTCUSDT", (Optional. If not in message, INFER from context/reply chain. Strip #/$)
   "action": "MOVE_SL" or "CLOSE_FULL" or "CLOSE_PARTIAL" or "BOOK_R",
   "value": float OR string ("ENTRY", "BE", "LIQ") if applicable,
-  "raw_text": "original text segment"
+  "raw_text": "original text segment" (e.g. "Target 1 Hit")
 }}
 
 If IGNORE (news, fluff, marketing):
@@ -48,10 +48,12 @@ If IGNORE (news, fluff, marketing):
 
 Rules:
 1. If "Booked 1R", action is BOOK_R, value is 1.
-2. If "Move SL to Entry" or "SL to BE" or "Breakeven", action is MOVE_SL, value is "ENTRY".
-3. If "SL to Liquidation" or "SL Liq", action is MOVE_SL, value is "LIQ".
-4. If "SL 69000", action is MOVE_SL, value is 69000.
-5. Handle loose formatting.
+2. If "Move SL to Entry", action is MOVE_SL, value is "ENTRY".
+3. If "SL to BE" or "Breakeven", action is MOVE_SL, value is "BE".
+4. If "SL to Liquidation" or "SL Liq", action is MOVE_SL, value is "LIQ".
+5. If "SL 69000", action is MOVE_SL, value is 69000.
+5. "TARGET", "T1/T2/T3", "OBJECTIVE" refer to TP. "INVALIDATION", "STOP", "STOPLOSS" refer to SL.
+6. Handle loose formatting.
 """
 
 async def parse_message(message_text, reply_context=""):

@@ -287,9 +287,19 @@ class TelegramListener:
                          return
 
                      if new_sl_upper in ["ENTRY", "BE", "BREAKEVEN"]:
-                         # Set to Entry Price
+                         # Smart Breakeven: Entry + 0.1% buffer on profit side
                          real_entry = float(position['entryPrice'])
-                         new_sl = real_entry
+                         pos_side = position.get('side', '').lower()
+                         buffer_pct = 0.001  # 0.1% gap to cover fees
+                         
+                         if pos_side == 'long':
+                             new_sl = real_entry * (1 + buffer_pct)
+                         elif pos_side == 'short':
+                             new_sl = real_entry * (1 - buffer_pct)
+                         else:
+                             new_sl = real_entry
+                         
+                         logger.info(f"Breakeven: entry={real_entry}, new_sl={new_sl} ({pos_side})")
                          
                      elif new_sl_upper in ["LIQ", "LIQUIDATION"]:
                          # Set to Liquidation Price
