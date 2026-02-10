@@ -139,12 +139,9 @@ class TelegramListener:
              await self.notifier.send(f"⚠️ Signal Skipped: Max concurrent trades reached ({open_trades_count}/3). Ignored {symbol}.")
              return
         
-        # Clean Symbol
-        # Remove #, $
-        symbol = symbol.replace("#", "").replace("$", "").upper()
-        # Ensure it ends with USDT to target USDT-FUTURES (Linear Perps)
-        if not symbol.endswith("USDT"):
-            symbol += "USDT"
+        # Validate & Correct Symbol (e.g. BONK -> 1000BONKUSDT)
+        symbol = await self.exchange.validate_symbol(symbol)
+        logger.info(f"Symbol resolved to: {symbol}")
             
         try:
             # Get market price

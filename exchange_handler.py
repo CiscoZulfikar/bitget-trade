@@ -284,6 +284,59 @@ class ExchangeHandler:
             logger.error(f"Error fetching tickers: {e}")
             return {s: {'last': 0.0, 'percentage': 0.0, 'daily_pct': 0.0} for s in symbols}
 
+    async def validate_symbol(self, input_symbol):
+        """
+        Validates and corrects the symbol for Bitget Futures.
+        Handles prefixes like '1000' for memecoins (e.g., BONK -> 1000BONKUSDT).
+        """
+        try:
+            # clean input
+            base = input_symbol.upper().replace("USDT", "").replace("$", "").replace("#", "")
+            
+            # Common formats to try
+            potential_symbols = [
+                f"{base}USDT",           # Standard: BTCUSDT
+                f"1000{base}USDT",       # Memecoins: 1000BONKUSDT, 1000PEPEUSDT
+                f"k{base}USDT",          # Kilo prefix: kBONKUSDT (less common but exists)
+                f"{base}USD"             # Inverse (unlikely for USDT margin but checking)
+            ]
+            
+            # Ensure markets are loaded
+            if not self.exchange.markets:
+                await self.exchange.load_markets()
+                
+            # Check against loaded markets (keys are usually 'BTC/USDT:USDT')
+            # standardized dict keys usually format as 'BTC/USDT:USDT'
+            # We also have the raw 'id' field which matches the API symbol
+            
+            # Create a map of ID -> Market
+            market_ids = {m['id']: m for m in self.exchange.markets.values()}
+            
+            for sym in potential_symbols:
+                # Check directly in market IDs (Bitget IDs are usually like 'BTCUSDT_UMCBL')
+                # But CCXT might use 'BTCUSDT' as id or 'BTCUSDT_UMCBL'
+                # Let's fuzzy match the ID
+                
+                # 1. Exact match in CCXT Symbols
+                # CCXT symbol '1000BONK/USDT:USDT' -> ID '1000BONKUSDT_UMCBL' (usually)
+                
+                # Check standard CCXT symbols
+                ccxt_target = f"{sym.replace('USDT', '')}/USDT:USDT"
+                if ccxt_target in self.exchange.markets:
+                    return self.exchange.markets[ccxt_target]['id'] # Return the API ID (e.g. 1000BONKUSDT)
+                
+                # 2. Check strict ID match (ignoring _UMCBL suffix if present)
+                for mid in market_ids.keys():
+                    if mid.startswith(sym):
+                        return mid
+                        
+            # If no match found, standard fallback
+            return f"{base}USDT"
+            
+        except Exception as e:
+            logger.error(f"Symbol validation failed for {input_symbol}: {e}")
+            return f"{base}USDT"
+
     async def place_order(self, symbol, side, amount, leverage, sl_price=None, tp_price=None, price=None, order_type='market'):
         # 1. Ensure Hedge Mode & Isolated Margin
         await self.ensure_hedge_mode(symbol)
