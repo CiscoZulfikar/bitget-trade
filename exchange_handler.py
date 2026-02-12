@@ -98,6 +98,42 @@ class ExchangeHandler:
             logger.error(f"Error fetching position for {symbol}: {e}")
             return None
 
+    async def resolve_symbol(self, symbol):
+        """
+        Resolves a user-friendly symbol (e.g. BTCUSDT) to the CCXT Unified Future Symbol (e.g. BTC/USDT:USDT).
+        Prioritizes USDT-FUTURES.
+        """
+        try:
+            if not self.exchange.markets:
+                await self.exchange.load_markets()
+            
+            # 1. Direct check (if already correct)
+            if symbol in self.exchange.markets:
+                return symbol
+            
+            # 2. Iterate and match
+            target_clean = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
+            
+            # Preference: Linear Futures (Swap)
+            for m_symbol, market in self.exchange.markets.items():
+                # We want USDT futures/swaps
+                if not (market.get('linear') and market.get('quote') == 'USDT'):
+                    continue
+                
+                # Normalize this market's symbol
+                m_clean = m_symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
+                
+                if m_clean == target_clean:
+                    return m_symbol  # Return the CCXT Unified Symbol (e.g. BTC/USDT:USDT)
+            
+            # If no future found, return original (fallback)
+            logger.warning(f"Could not resolve future symbol for {symbol}. Returning original.")
+            return symbol
+            
+        except Exception as e:
+            logger.error(f"Symbol Resolution Error: {e}")
+            return symbol
+
     async def get_all_positions(self):
         """Fetches ALL open positions from the exchange (for Status/Limit checks)."""
         try:
@@ -448,12 +484,13 @@ class ExchangeHandler:
             position = await self.get_position(symbol)
             if not position:
                 # Fallback: Check for Open Limit Order to Update (Cancel & Replace)
-                orders = await self.exchange.fetch_open_orders(symbol)
+                resolved_symbol = await self.resolve_symbol(symbol)
+                orders = await self.exchange.fetch_open_orders(resolved_symbol)
                 limit_order = next((o for o in orders if o['type'] == 'limit'), None)
                 
                 if limit_order:
-                    logger.info(f"Found Open Limit Order {limit_order['id']} for {symbol}. Updating SL via Replace.")
-                    return await self.replace_limit_order(symbol, limit_order, new_sl=new_sl)
+                    logger.info(f"Found Open Limit Order {limit_order['id']} for {symbol} ({resolved_symbol}). Updating SL via Replace.")
+                    return await self.replace_limit_order(resolved_symbol, limit_order, new_sl=new_sl)
                 
                 logger.warning(f"Cannot update SL for {symbol}: No active position or open limit order.")
                 return False
@@ -578,9 +615,10 @@ class ExchangeHandler:
     async def cancel_all_orders(self, symbol):
         """Cancels all open orders (Limit, TP, SL) for a specific symbol."""
         try:
+            resolved_symbol = await self.resolve_symbol(symbol)
             # cancel_all_orders is supported by CCXT for Bitget
-            await self.exchange.cancel_all_orders(symbol)
-            logger.info(f"Cancelled all open orders for {symbol}")
+            await self.exchange.cancel_all_orders(resolved_symbol)
+            logger.info(f"Cancelled all open orders for {symbol} ({resolved_symbol})")
             return True
         except Exception as e:
             logger.error(f"Failed to cancel orders for {symbol}: {e}")
@@ -589,8 +627,9 @@ class ExchangeHandler:
     async def cancel_order(self, symbol, order_id):
         """Cancels a specific order by ID."""
         try:
-            await self.exchange.cancel_order(order_id, symbol)
-            logger.info(f"Cancelled order {order_id} for {symbol}")
+            resolved_symbol = await self.resolve_symbol(symbol)
+            await self.exchange.cancel_order(order_id, resolved_symbol)
+            logger.info(f"Cancelled order {order_id} for {symbol} ({resolved_symbol})")
             return True
         except Exception as e:
             logger.error(f"Failed to cancel order {order_id} for {symbol}: {e}")
@@ -602,12 +641,13 @@ class ExchangeHandler:
             position = await self.get_position(symbol)
             if not position:
                 # Fallback: Check for Open Limit Order to Update (Cancel & Replace)
-                orders = await self.exchange.fetch_open_orders(symbol)
+                resolved_symbol = await self.resolve_symbol(symbol)
+                orders = await self.exchange.fetch_open_orders(resolved_symbol)
                 limit_order = next((o for o in orders if o['type'] == 'limit'), None)
                 
                 if limit_order:
-                    logger.info(f"Found Open Limit Order {limit_order['id']} for {symbol}. Updating TP via Replace.")
-                    return await self.replace_limit_order(symbol, limit_order, new_tp=new_tp)
+                    logger.info(f"Found Open Limit Order {limit_order['id']} for {symbol} ({resolved_symbol}). Updating TP via Replace.")
+                    return await self.replace_limit_order(resolved_symbol, limit_order, new_tp=new_tp)
 
                 logger.warning(f"Cannot update TP for {symbol}: No active position.")
                 return False
