@@ -518,5 +518,80 @@ class ExchangeHandler:
             logger.error(f"Failed to cancel orders for {symbol}: {e}")
             return False
 
+    async def cancel_order(self, symbol, order_id):
+        """Cancels a specific order by ID."""
+        try:
+            await self.exchange.cancel_order(order_id, symbol)
+            logger.info(f"Cancelled order {order_id} for {symbol}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to cancel order {order_id} for {symbol}: {e}")
+            return False
+
+    async def update_tp(self, symbol, new_tp):
+        try:
+            # 1. Get current position to know side
+            position = await self.get_position(symbol)
+            if not position:
+                logger.warning(f"Cannot update TP for {symbol}: No active position.")
+                return False
+
+            side = position['side']  # 'long' or 'short'
+
+            # 2. Cancel Existing TP Orders (Plan Orders)
+            try:
+                if hasattr(self.exchange, 'privateMixGetV2MixOrderOrdersPlanPending'):
+                    # Sanitize Symbol
+                    raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
+                    params = {
+                        "symbol": raw_symbol,
+                        "productType": "USDT-FUTURES",
+                        "planType": "profit_plan"
+                    }
+                    resp = await self.exchange.privateMixGetV2MixOrderOrdersPlanPending(params)
+
+                    if resp['code'] == '00000' and 'entrustedList' in resp['data']:
+                        for o in resp['data']['entrustedList']:
+                            oid = o['orderId']
+                            # Cancel
+                            cancel_params = {
+                                "symbol": raw_symbol,
+                                "productType": "USDT-FUTURES",
+                                "orderId": oid,
+                                "planType": "profit_plan"
+                            }
+                            await self.exchange.privateMixPostV2MixOrderCancelPlanOrder(cancel_params)
+                            logger.info(f"Cancelled old TP order {oid} for {symbol}")
+            except Exception as e:
+                logger.warning(f"Error cancelling old TPs: {e}")
+
+            # 3. Place New TP
+            try:
+                raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
+                req = {
+                    "symbol": raw_symbol,
+                    "productType": "USDT-FUTURES",
+                    "marginCoin": "USDT",
+                    "planType": "profit_plan",
+                    "triggerPrice": str(new_tp),
+                    "triggerType": "market_price",
+                    "holdSide": side
+                }
+                res = await self.exchange.privateMixPostV2MixOrderPlaceTPSL(req)
+
+                if res['code'] == '00000':
+                    logger.info(f"Updated TP for {symbol} to {new_tp} (ID: {res['data']['orderId']})")
+                    return True
+                else:
+                    logger.error(f"Failed to place new TP: {res}")
+                    return False
+            except Exception as e:
+                logger.error(f"Failed to execute PlaceTPSL (TP): {e}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Update TP failed: {e}")
+            return False
+
     async def close(self):
         await self.exchange.close()

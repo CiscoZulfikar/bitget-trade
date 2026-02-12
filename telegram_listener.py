@@ -373,8 +373,32 @@ class TelegramListener:
                 await self.notifier.send(f"⚠️ Failed to close (or no position for) {symbol}.")
 
         elif action == "CANCEL":
-            await self.exchange.cancel_all_orders(symbol)
-            await self.notifier.send(f"🚫 Cancelled all open orders for {symbol}.")
+            # Scenario 1: Reply Context -> Cancel Specific Order
+            if trade and trade.get('order_id'):
+                logger.info(f"Cancelling specific order {trade['order_id']} for {symbol}")
+                success = await self.exchange.cancel_order(symbol, trade['order_id'])
+                if success:
+                    await self.notifier.send(f"🚫 Cancelled Order `{trade['order_id']}` for {symbol}.")
+                else:
+                    await self.notifier.send(f"⚠️ Failed to cancel order `{trade['order_id']}` (It might be filled or already cancelled). checking symbol-wide...")
+                    # Fallback? Maybe not automatically, user might want to know it failed.
+            
+            # Scenario 2: No Reply / General Symbol Cancel -> Cancel All
+            else:
+                logger.info(f"Cancelling ALL orders for {symbol}")
+                await self.exchange.cancel_all_orders(symbol)
+                await self.notifier.send(f"🚫 Cancelled all open orders for {symbol}.")
+
+        elif action == "MOVE_TP":
+            new_tp = data['value']
+            
+            # Scale if numeric (and not special string, though TP usually numeric)
+            if not isinstance(new_tp, str):
+                 market_price = await self.exchange.get_market_price(symbol)
+                 new_tp = self.risk_manager.scale_price(new_tp, market_price)
+            
+            await self.exchange.update_tp(symbol, new_tp)
+            await self.notifier.send(f"🎯 Signal Edited: Updated TP for {symbol} to {new_tp}.")
 
     async def close(self):
         """Cleanup resources."""
