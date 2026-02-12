@@ -72,7 +72,8 @@ class ExchangeHandler:
     async def get_position(self, symbol):
         """Fetches the current open position for the symbol."""
         try:
-            positions = await self.exchange.fetch_positions([symbol], params={'productType': 'USDT-FUTURES'})
+            # Fetch ALL positions to avoid CCXT symbol filtering issues (e.g. BTCUSDT vs BTC/USDT:USDT)
+            positions = await self.exchange.fetch_positions(params={'productType': 'USDT-FUTURES'})
             # Filter for active positions (size > 0)
             
             # Simple match first
