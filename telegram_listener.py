@@ -159,6 +159,18 @@ class TelegramListener:
         entry_price = self.risk_manager.scale_price(signal_entry, market_price)
         sl_price = self.risk_manager.scale_price(signal_sl, market_price)
         
+        # Take Profit Handling
+        tp_price = None
+        tp_list = data.get('tp', [])
+        if tp_list:
+            # Scale the first TP for the order
+            tp_price = self.risk_manager.scale_price(tp_list[0], market_price)
+            # Scale all TPs for logging/display
+            scaled_tps = [self.risk_manager.scale_price(tp, market_price) for tp in tp_list]
+            tp_display = ", ".join([str(tp) for tp in scaled_tps])
+        else:
+            tp_display = "None"
+
         # Decision Logic (Market vs Limit vs Abort)
         explicit_type = data.get('order_type', 'MARKET')
         action, decision_price, reason = self.risk_manager.determine_entry_action(entry_price, market_price, explicit_type)
@@ -185,9 +197,9 @@ class TelegramListener:
                  balance = 1000.0
                  equity = 1000.0
             else:
-                logger.error(f"Failed to fetch balance: {e}")
-                await self.notifier.send("⚠️ Error: Could not fetch wallet balance.")
-                return
+                 logger.error(f"Failed to fetch balance: {e}")
+                 await self.notifier.send("⚠️ Error: Could not fetch wallet balance.")
+                 return
 
         position_size_usdt = self.risk_manager.calculate_position_size(balance)
         leverage = self.risk_manager.calculate_leverage(exec_price, sl_price)
@@ -201,24 +213,25 @@ class TelegramListener:
                 f"**Entry:** {exec_price}\n"
                 f"**Leverage:** {leverage}x\n"
                 f"**Size:** ${position_size_usdt:.2f} ({15}% of ${balance:.2f} Free)\n"
+                f"**TP:** {tp_display}\n"
                 f"**SL:** {sl_price}\n"
                 f"**Reason:** {reason}"
             )
             # Store in DB as mock? Or skip?
             # Storing allows testing updates. Let's store with status "MOCK"
-            await store_trade(msg_id, "MOCK_ORDER_ID", symbol, entry_price, sl_price, status="MOCK")
+            await store_trade(msg_id, "MOCK_ORDER_ID", symbol, entry_price, sl_price, tp_price=tp_price, status="MOCK")
             return
 
         amount = (position_size_usdt * leverage) / exec_price
         side = 'buy' if direction.upper() == 'LONG' else 'sell'
-        logger.info(f"Placing {action} {direction} on {symbol} x{leverage}. SL: {sl_price}")
+        logger.info(f"Placing {action} {direction} on {symbol} x{leverage}. TP: {tp_price}, SL: {sl_price}")
         
         try:
-            order = await self.exchange.place_order(symbol, side, amount, leverage, sl_price=sl_price, price=exec_price if action == 'LIMIT' else None, order_type=action)
+            order = await self.exchange.place_order(symbol, side, amount, leverage, sl_price=sl_price, tp_price=tp_price, price=exec_price if action == 'LIMIT' else None, order_type=action)
             
             if order:
-                await store_trade(msg_id, order['id'], symbol, entry_price, sl_price, status="OPEN")
-                await self.notifier.send(f"🟢 {action} Order Opened: {symbol} at {exec_price} with {leverage}x.\nReason: {reason}")
+                await store_trade(msg_id, order['id'], symbol, entry_price, sl_price, tp_price=tp_price, status="OPEN")
+                await self.notifier.send(f"🟢 {action} Order Opened: {symbol} at {exec_price} with {leverage}x.\n**TP:** {tp_display}\n**SL:** {sl_price}\nReason: {reason}")
             else:
                 # Should not happen if place_order raises on error, but handled for safety
                 await self.notifier.send(f"⚠️ Execution failed for {symbol} (Unknown reason/None returned).")
