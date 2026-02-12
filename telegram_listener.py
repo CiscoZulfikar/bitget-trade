@@ -349,7 +349,9 @@ class TelegramListener:
                 if last_trade:
                     final_price = float(last_trade.get('price', 0.0))
                     # Try to get PnL
-                    if 'info' in last_trade and 'cRealizedPL' in last_trade['info']:
+                    if 'info' in last_trade and 'profit' in last_trade['info']:
+                        realized_pnl = float(last_trade['info']['profit'])
+                    elif 'info' in last_trade and 'cRealizedPL' in last_trade['info']:
                         realized_pnl = float(last_trade['info']['cRealizedPL'])
                     elif 'realizedPnl' in last_trade:
                          realized_pnl = float(last_trade['realizedPnl'] or 0.0)
@@ -579,7 +581,9 @@ class TelegramListener:
                         if last_trade:
                             price = float(last_trade.get('price', 0.0))
                             # realisedPnl is often in the trade history
-                            if 'info' in last_trade and 'cRealizedPL' in last_trade['info']:
+                            if 'info' in last_trade and 'profit' in last_trade['info']:
+                                pnl = float(last_trade['info']['profit'])
+                            elif 'info' in last_trade and 'cRealizedPL' in last_trade['info']:
                                 pnl = float(last_trade['info']['cRealizedPL']) # Bitget V2 key?
                             elif 'realizedPnl' in last_trade: # CCXT unified
                                 pnl = float(last_trade['realizedPnl'] or 0.0)

@@ -74,7 +74,24 @@ class ExchangeHandler:
         try:
             positions = await self.exchange.fetch_positions([symbol], params={'productType': 'USDT-FUTURES'})
             # Filter for active positions (size > 0)
+            
+            # Simple match first
             target_pos = next((p for p in positions if p['symbol'] == symbol and float(p['contracts']) > 0), None)
+            
+            # If not found, try robust matching (CCXT symbol vs Input symbol)
+            # Input: WIFUSDT -> CCXT: WIF/USDT:USDT
+            if not target_pos:
+                 for p in positions:
+                     if float(p['contracts']) > 0:
+                         # Check if standardizing the CCXT symbol matches the input
+                         # WIF/USDT:USDT -> WIFUSDT
+                         p_sym_clean = p['symbol'].replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
+                         input_clean = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
+                         
+                         if p_sym_clean == input_clean:
+                             target_pos = p
+                             break
+
             return target_pos
         except Exception as e:
             logger.error(f"Error fetching position for {symbol}: {e}")
