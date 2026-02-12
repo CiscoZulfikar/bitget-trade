@@ -415,8 +415,9 @@ class ExchangeHandler:
         await self.ensure_hedge_mode(symbol)
         await self.ensure_isolated_margin(symbol)
         
-        # 2. Set leverage
-        await self.set_leverage(symbol, leverage)
+        # 2. Set leverage (if provided)
+        if leverage:
+            await self.set_leverage(symbol, leverage)
         
         params = {}
         # Explicitly set posSide for Hedge Mode (Bitget V2 Requirement)
@@ -600,7 +601,7 @@ class ExchangeHandler:
             # Or just don't set it (pass None) and let place_order handle it? 
             # place_order expects leverage.
             
-            leverage = 20 # Default fallback
+            leverage = None # Default to None (preserve account leverage)
             
             return await self.place_order(
                 symbol, side, amount, leverage, 
