@@ -617,7 +617,7 @@ class ExchangeHandler:
             )
             
             if new_order:
-                return True
+                return True, "Success"
             else:
                 raise Exception("place_order returned None (likely API error)")
 
@@ -626,21 +626,16 @@ class ExchangeHandler:
             
             # 6. ROLLBACK: Re-place Original Order
             try:
-                # We pass leverage=None to respect account state (which might have been changed by failed attempt, 
-                # but usually safe to assume we want whatever the account has or previous leverage).
-                # Ideally we would restore exact leverage, but we didn't change it if place_order failed early.
-                # If place_order changed leverage then failed, we might be stuck on new leverage.
-                # However, safe default is better than no order.
                 await self.place_order(
                     symbol, order['side'], original_amount, None, 
                     sl_price=original_sl, tp_price=original_tp, 
                     price=original_price, order_type='limit'
                 )
                 logger.info(f"Rollback successful: Restored order for {symbol}")
+                return False, f"Update Failed: {str(e)} (Old Order Restored)"
             except Exception as rollback_e:
                 logger.critical(f"FATAL: Rollback failed! Order {original_id} lost. Error: {rollback_e}")
-            
-            return False
+                return False, f"CRITICAL: Order Lost! Update failed and Rollback failed. ({str(rollback_e)})", f"CRITICAL: Order Lost! Update failed and Rollback failed. ({str(rollback_e)})"
 
     async def cancel_all_orders(self, symbol):
         """Cancels all open orders (Limit, TP, SL) for a specific symbol."""

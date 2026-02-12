@@ -329,12 +329,19 @@ class TelegramListener:
                  market_price = await self.exchange.get_market_price(symbol)
                  new_sl = self.risk_manager.scale_price(new_sl, market_price)
             
-            success = await self.exchange.update_sl(symbol, order_id, new_sl)
+            result = await self.exchange.update_sl(symbol, order_id, new_sl, risk_manager=self.risk_manager)
+            
+            # Handle return (bool, msg)
+            if isinstance(result, tuple):
+                success, msg = result
+            else:
+                success, msg = result, "Unknown Error"
+
             if success:
                 await update_trade_sl(trade['message_id'], new_sl)
                 await self.notifier.send(f"🟡 Signal Edited: Updated SL for {symbol} to {new_sl}.")
             else:
-                 await self.notifier.send(f"⚠️ Failed to update SL for {symbol}. (Check logs: No active position or API error)")
+                 await self.notifier.send(f"⚠️ Failed to update SL for {symbol}. Reason: {msg}")
             
         elif action in ["CLOSE_FULL", "BOOK_R"]:
             if action == "BOOK_R" and data.get('value'):
