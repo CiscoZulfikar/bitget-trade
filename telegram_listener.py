@@ -407,11 +407,18 @@ class TelegramListener:
                  market_price = await self.exchange.get_market_price(symbol)
                  new_tp = self.risk_manager.scale_price(new_tp, market_price)
             
-            success = await self.exchange.update_tp(symbol, new_tp)
+            result = await self.exchange.update_tp(symbol, new_tp)
+            
+            # Handle return (bool, msg)
+            if isinstance(result, tuple):
+                success, msg = result
+            else:
+                 success, msg = result, "Unknown Error"
+
             if success:
                 await self.notifier.send(f"🎯 Signal Edited: Updated TP for {symbol} to {new_tp}.")
             else:
-                await self.notifier.send(f"⚠️ Failed to update TP for {symbol}.")
+                await self.notifier.send(f"⚠️ Failed to update TP for {symbol}. Reason: {msg}")
 
     async def close(self):
         """Cleanup resources."""

@@ -494,7 +494,7 @@ class ExchangeHandler:
                     return await self.replace_limit_order(resolved_symbol, limit_order, new_sl=new_sl, risk_manager=risk_manager)
                 
                 logger.warning(f"Cannot update SL for {symbol}: No active position or open limit order.")
-                return False
+                return False, "No active position or open limit order found."
 
             side = position['side'] # 'long' or 'short'
             
@@ -542,17 +542,17 @@ class ExchangeHandler:
                 
                 if res['code'] == '00000':
                     logger.info(f"Updated SL for {symbol} to {new_sl} (ID: {res['data']['orderId']})")
-                    return True
+                    return True, "Success"
                 else:
                      logger.error(f"Failed to place new SL: {res}")
-                     return False
+                     return False, f"API Error: {res.get('msg', 'Unknown')}"
             except Exception as e:
                 logger.error(f"Failed to execute PlaceTPSL: {e}")
-                return False
+                return False, f"Exception: {str(e)}"
 
         except Exception as e:
             logger.error(f"Update SL failed: {e}")
-            return False
+            return False, f"Exception: {str(e)}"
 
     async def replace_limit_order(self, symbol, order, new_sl=None, new_tp=None, risk_manager=None):
         """Cancels an existing limit order and places a new one with updated params. Includes Rollback."""
