@@ -338,6 +338,8 @@ class TelegramListener:
                 r_multiple = data['value']
                 logger.info(f"Booking {r_multiple}R.")
             
+            # Enhanced Close: Cancel open orders first (limits/TP/SL)
+            await self.exchange.cancel_all_orders(symbol)
             success = await self.exchange.close_position(symbol)
             
             if success:
@@ -369,6 +371,10 @@ class TelegramListener:
                 await self.notifier.send(f"🔴 Trade Closed: {symbol} at {display_price}. Equity: ${new_equity:.2f}.\n{reason_str}")
             else:
                 await self.notifier.send(f"⚠️ Failed to close (or no position for) {symbol}.")
+
+        elif action == "CANCEL":
+            await self.exchange.cancel_all_orders(symbol)
+            await self.notifier.send(f"🚫 Cancelled all open orders for {symbol}.")
 
     async def close(self):
         """Cleanup resources."""

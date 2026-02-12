@@ -507,5 +507,16 @@ class ExchangeHandler:
             logger.error(f"Update SL failed: {e}")
             return False
 
+    async def cancel_all_orders(self, symbol):
+        """Cancels all open orders (Limit, TP, SL) for a specific symbol."""
+        try:
+            # cancel_all_orders is supported by CCXT for Bitget
+            await self.exchange.cancel_all_orders(symbol)
+            logger.info(f"Cancelled all open orders for {symbol}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to cancel orders for {symbol}: {e}")
+            return False
+
     async def close(self):
         await self.exchange.close()
