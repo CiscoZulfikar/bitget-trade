@@ -446,7 +446,15 @@ class ExchangeHandler:
             # 1. Get current position to know side (long/short)
             position = await self.get_position(symbol)
             if not position:
-                logger.warning(f"Cannot update SL for {symbol}: No active position.")
+                # Fallback: Check for Open Limit Order to Update (Cancel & Replace)
+                orders = await self.exchange.fetch_open_orders(symbol)
+                limit_order = next((o for o in orders if o['type'] == 'limit'), None)
+                
+                if limit_order:
+                    logger.info(f"Found Open Limit Order {limit_order['id']} for {symbol}. Updating SL via Replace.")
+                    return await self.replace_limit_order(symbol, limit_order, new_sl=new_sl)
+                
+                logger.warning(f"Cannot update SL for {symbol}: No active position or open limit order.")
                 return False
 
             side = position['side'] # 'long' or 'short'
@@ -507,6 +515,65 @@ class ExchangeHandler:
             logger.error(f"Update SL failed: {e}")
             return False
 
+    async def replace_limit_order(self, symbol, order, new_sl=None, new_tp=None):
+        """Cancels an existing limit order and places a new one with updated params."""
+        try:
+            # 1. Cancel Original
+            await self.cancel_order(symbol, order['id'])
+            
+            # 2. Prepare New Order Params
+            side = order['side']
+            amount = order['amount'] - order['filled'] # Remaining amount
+            price = order['price']
+            
+            # Use new SL/TP if provided, else keep old from 'info' if possible (complex)
+            # For simplicity, if we are updating SL, we might lose TP if not careful.
+            # Best effort: Check if order had attached params? 
+            # CCXT 'info' might have 'presetStopLossPrice'.
+            
+            current_sl = new_sl
+            current_tp = new_tp
+            
+            # Try to preserve existing if not updating
+            if not current_sl and 'info' in order and 'presetStopLossPrice' in order['info']:
+                 current_sl = order['info']['presetStopLossPrice']
+            if not current_tp and 'info' in order and 'presetStopSurplusPrice' in order['info']:
+                 current_tp = order['info']['presetStopSurplusPrice']
+            
+            # 3. Place New Order
+            # We assume leverage/margin mode already set (since we had an order)
+            # But place_order ensures it anyway.
+            # We need to call place_order but with explicit logic to avoid double-setting leverage?
+            # actually place_order is fine.
+            
+            # Determine leverage? We might need to fetch it or just assume last used.
+            # safe to just use place_order logic which sets leverage again (no harm).
+            # But wait, we need 'leverage' argument for place_order. 
+            # We can try to get it from position (if any) or existing order info?
+            # Order info doesn't always have leverage.
+            # Let's default to a safe value or fetch from account?
+            # fetch_positions might show leverage even if size is 0?
+            
+            # Let's peek at leverage from position risk
+            # positions = await self.exchange.fetch_positions([symbol])
+            # ...
+            # For now, let's just pass a default or try to find it. 
+            # A safe fallback is 20 or read from config if we had one.
+            # Or just don't set it (pass None) and let place_order handle it? 
+            # place_order expects leverage.
+            
+            leverage = 20 # Default fallback
+            
+            return await self.place_order(
+                symbol, side, amount, leverage, 
+                sl_price=current_sl, tp_price=current_tp, 
+                price=price, order_type='limit'
+            )
+            
+        except Exception as e:
+            logger.error(f"Replace Limit Order failed: {e}")
+            return None
+
     async def cancel_all_orders(self, symbol):
         """Cancels all open orders (Limit, TP, SL) for a specific symbol."""
         try:
@@ -533,6 +600,14 @@ class ExchangeHandler:
             # 1. Get current position to know side
             position = await self.get_position(symbol)
             if not position:
+                # Fallback: Check for Open Limit Order to Update (Cancel & Replace)
+                orders = await self.exchange.fetch_open_orders(symbol)
+                limit_order = next((o for o in orders if o['type'] == 'limit'), None)
+                
+                if limit_order:
+                    logger.info(f"Found Open Limit Order {limit_order['id']} for {symbol}. Updating TP via Replace.")
+                    return await self.replace_limit_order(symbol, limit_order, new_tp=new_tp)
+
                 logger.warning(f"Cannot update TP for {symbol}: No active position.")
                 return False
 

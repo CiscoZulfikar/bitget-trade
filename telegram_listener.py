@@ -329,9 +329,12 @@ class TelegramListener:
                  market_price = await self.exchange.get_market_price(symbol)
                  new_sl = self.risk_manager.scale_price(new_sl, market_price)
             
-            await self.exchange.update_sl(symbol, order_id, new_sl)
-            await update_trade_sl(trade['message_id'], new_sl)
-            await self.notifier.send(f"🟡 Signal Edited: Updated SL for {symbol} to {new_sl}.")
+            success = await self.exchange.update_sl(symbol, order_id, new_sl)
+            if success:
+                await update_trade_sl(trade['message_id'], new_sl)
+                await self.notifier.send(f"🟡 Signal Edited: Updated SL for {symbol} to {new_sl}.")
+            else:
+                 await self.notifier.send(f"⚠️ Failed to update SL for {symbol}. (Check logs: No active position or API error)")
             
         elif action in ["CLOSE_FULL", "BOOK_R"]:
             if action == "BOOK_R" and data.get('value'):
@@ -397,8 +400,11 @@ class TelegramListener:
                  market_price = await self.exchange.get_market_price(symbol)
                  new_tp = self.risk_manager.scale_price(new_tp, market_price)
             
-            await self.exchange.update_tp(symbol, new_tp)
-            await self.notifier.send(f"🎯 Signal Edited: Updated TP for {symbol} to {new_tp}.")
+            success = await self.exchange.update_tp(symbol, new_tp)
+            if success:
+                await self.notifier.send(f"🎯 Signal Edited: Updated TP for {symbol} to {new_tp}.")
+            else:
+                await self.notifier.send(f"⚠️ Failed to update TP for {symbol}.")
 
     async def close(self):
         """Cleanup resources."""
