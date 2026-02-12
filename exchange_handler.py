@@ -604,6 +604,23 @@ class ExchangeHandler:
                      position_value = margin_per_trade * leverage
                      new_amount = position_value / entry_price
                      
+                     # 3. Check Minimum Amount (Exchange Constraints)
+                     try:
+                         market = self.exchange.market(symbol)
+                         if 'limits' in market and 'amount' in market['limits'] and 'min' in market['limits']['amount']:
+                             min_amount = market['limits']['amount']['min']
+                             if new_amount < min_amount:
+                                 logger.warning(f"Calculated amount {new_amount} < Min {min_amount}. Adjusting...")
+                                 
+                                 # Check if we can afford the minimum amount using current leverage and balance
+                                 required_margin = (min_amount * entry_price) / leverage
+                                 if required_margin > free_balance:
+                                     raise Exception(f"Insufficient balance for min amount. Req: ${required_margin:.2f}, Free: ${free_balance:.2f}")
+                                     
+                                 new_amount = min_amount
+                     except Exception as market_e:
+                         logger.warning(f"Failed to check market limits: {market_e}")
+
                      logger.info(f"Dynamic Sizing: Bal=${free_balance:.2f} -> Margin=${margin_per_trade:.2f} -> {leverage}x -> Size={new_amount:.4f}")
                      amount = new_amount
                  except Exception as e:
@@ -675,7 +692,7 @@ class ExchangeHandler:
                     return await self.replace_limit_order(resolved_symbol, limit_order, new_tp=new_tp)
 
                 logger.warning(f"Cannot update TP for {symbol}: No active position.")
-                return False
+                return False, "No active position or open limit order found."
 
             side = position['side']  # 'long' or 'short'
 
@@ -709,30 +726,27 @@ class ExchangeHandler:
             # 3. Place New TP
             try:
                 raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
-                req = {
+                
+                params = {
                     "symbol": raw_symbol,
                     "productType": "USDT-FUTURES",
                     "marginCoin": "USDT",
                     "planType": "profit_plan",
                     "triggerPrice": str(new_tp),
-                    "triggerType": "market_price",
-                    "holdSide": side
+                    "holdSide": "long" if side == "long" else "short"
                 }
-                res = await self.exchange.privateMixPostV2MixOrderPlaceTPSL(req)
-
-                if res['code'] == '00000':
-                    logger.info(f"Updated TP for {symbol} to {new_tp} (ID: {res['data']['orderId']})")
-                    return True
-                else:
-                    logger.error(f"Failed to place new TP: {res}")
-                    return False
+                
+                await self.exchange.privateMixPostV2MixOrderPlacePlanOrder(params)
+                logger.info(f"Placed new TP plan order for {symbol} at {new_tp}")
+                return True, "Success"
+                
             except Exception as e:
-                logger.error(f"Failed to execute PlaceTPSL (TP): {e}")
-                return False
+                logger.error(f"Failed to execute PlaceTP: {e}")
+                return False, f"Failed to modify position TP: {e}"
 
         except Exception as e:
             logger.error(f"Update TP failed: {e}")
-            return False
+            return False, str(e)
 
     async def close(self):
         await self.exchange.close()
