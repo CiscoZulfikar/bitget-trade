@@ -4,7 +4,7 @@ import math
 logger = logging.getLogger(__name__)
 
 class RiskManager:
-    def __init__(self, initial_balance=100.0, leverage_loss_cap=0.70, max_leverage=50):
+    def __init__(self, initial_balance=100.0, leverage_loss_cap=0.50, max_leverage=50):
         self.balance = initial_balance
         self.leverage_loss_cap = leverage_loss_cap
         self.max_leverage = max_leverage
