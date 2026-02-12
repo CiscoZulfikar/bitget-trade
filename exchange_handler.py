@@ -479,7 +479,7 @@ class ExchangeHandler:
             logger.error(f"Close position failed: {e}")
             return False
 
-    async def update_sl(self, symbol, order_id, new_sl):
+    async def update_sl(self, symbol, order_id, new_sl, risk_manager=None):
         try:
             # 1. Get current position to know side (long/short)
             position = await self.get_position(symbol)
@@ -491,7 +491,7 @@ class ExchangeHandler:
                 
                 if limit_order:
                     logger.info(f"Found Open Limit Order {limit_order['id']} for {symbol} ({resolved_symbol}). Updating SL via Replace.")
-                    return await self.replace_limit_order(resolved_symbol, limit_order, new_sl=new_sl)
+                    return await self.replace_limit_order(resolved_symbol, limit_order, new_sl=new_sl, risk_manager=risk_manager)
                 
                 logger.warning(f"Cannot update SL for {symbol}: No active position or open limit order.")
                 return False
@@ -554,64 +554,93 @@ class ExchangeHandler:
             logger.error(f"Update SL failed: {e}")
             return False
 
-    async def replace_limit_order(self, symbol, order, new_sl=None, new_tp=None):
-        """Cancels an existing limit order and places a new one with updated params."""
+    async def replace_limit_order(self, symbol, order, new_sl=None, new_tp=None, risk_manager=None):
+        """Cancels an existing limit order and places a new one with updated params. Includes Rollback."""
+        
+        # 1. Store Original State for Rollback
+        original_id = order['id']
+        original_amount = order['amount'] - order['filled']
+        original_price = order['price']
+        original_sl = None
+        original_tp = None
+        
+        # Try to retrieve original embedded SL/TP
+        if 'info' in order:
+             original_sl = order['info'].get('presetStopLossPrice')
+             original_tp = order['info'].get('presetStopSurplusPrice')
+
+        # 2. Cancel Original (Must succeed to proceed)
+        if not await self.cancel_order(symbol, original_id):
+            logger.error(f"Identify: Could not cancel order {original_id}. Aborting update.")
+            return False
+
         try:
-            # 1. Cancel Original
-            await self.cancel_order(symbol, order['id'])
-            
-            # 2. Prepare New Order Params
+            # 3. Prepare New Order Params
             side = order['side']
-            amount = order['amount'] - order['filled'] # Remaining amount
-            price = order['price']
+            price = original_price
             
-            # Use new SL/TP if provided, else keep old from 'info' if possible (complex)
-            # For simplicity, if we are updating SL, we might lose TP if not careful.
-            # Best effort: Check if order had attached params? 
-            # CCXT 'info' might have 'presetStopLossPrice'.
+            # Use new SL/TP if provided, else keep old
+            current_sl = new_sl if new_sl else original_sl
+            current_tp = new_tp if new_tp else original_tp
             
-            current_sl = new_sl
-            current_tp = new_tp
-            
-            # Try to preserve existing if not updating
-            if not current_sl and 'info' in order and 'presetStopLossPrice' in order['info']:
-                 current_sl = order['info']['presetStopLossPrice']
-            if not current_tp and 'info' in order and 'presetStopSurplusPrice' in order['info']:
-                 current_tp = order['info']['presetStopSurplusPrice']
-            
-            # 3. Place New Order
-            # We assume leverage/margin mode already set (since we had an order)
-            # But place_order ensures it anyway.
-            # We need to call place_order but with explicit logic to avoid double-setting leverage?
-            # actually place_order is fine.
-            
-            # Determine leverage? We might need to fetch it or just assume last used.
-            # safe to just use place_order logic which sets leverage again (no harm).
-            # But wait, we need 'leverage' argument for place_order. 
-            # We can try to get it from position (if any) or existing order info?
-            # Order info doesn't always have leverage.
-            # Let's default to a safe value or fetch from account?
-            # fetch_positions might show leverage even if size is 0?
-            
-            # Let's peek at leverage from position risk
-            # positions = await self.exchange.fetch_positions([symbol])
-            # ...
-            # For now, let's just pass a default or try to find it. 
-            # A safe fallback is 20 or read from config if we had one.
-            # Or just don't set it (pass None) and let place_order handle it? 
-            # place_order expects leverage.
-            
-            leverage = None # Default to None (preserve account leverage)
-            
-            return await self.place_order(
+            leverage = None
+            amount = original_amount # Default to existing amount
+
+            # 4. Dynamic Risk & Sizing Calculation
+            # Only if updating SL (which changes risk) and we have the manager
+            if new_sl and risk_manager and order['type'] == 'limit':
+                 try:
+                     entry_price = float(price)
+                     
+                     # A. Calculate New Leverage
+                     leverage = risk_manager.calculate_leverage(entry_price, new_sl)
+                     
+                     # B. Calculate New Size (15% Margin Rule)
+                     # Fetch fresh balance (funds released by cancel)
+                     balance_data = await self.get_balance()
+                     free_balance = balance_data['free']
+                     
+                     margin_per_trade = risk_manager.calculate_position_size(free_balance)
+                     position_value = margin_per_trade * leverage
+                     new_amount = position_value / entry_price
+                     
+                     logger.info(f"Dynamic Sizing: Bal=${free_balance:.2f} -> Margin=${margin_per_trade:.2f} -> {leverage}x -> Size={new_amount:.4f}")
+                     amount = new_amount
+                 except Exception as e:
+                     logger.warning(f"Failed to recalculate size/leverage: {e}. Using old values.")
+
+            # 5. Place New Order
+            new_order = await self.place_order(
                 symbol, side, amount, leverage, 
                 sl_price=current_sl, tp_price=current_tp, 
                 price=price, order_type='limit'
             )
             
+            if new_order:
+                return True
+            else:
+                raise Exception("place_order returned None (likely API error)")
+
         except Exception as e:
-            logger.error(f"Replace Limit Order failed: {e}")
-            return None
+            logger.error(f"Replace Order Failed: {e}. Initiating ROLLBACK...")
+            
+            # 6. ROLLBACK: Re-place Original Order
+            try:
+                # We pass leverage=None to respect account state (which might have been changed by failed attempt, 
+                # but usually safe to assume we want whatever the account has or previous leverage).
+                # Ideally we would restore exact leverage, but we didn't change it if place_order failed early.
+                # If place_order changed leverage then failed, we might be stuck on new leverage.
+                # However, safe default is better than no order.
+                await self.place_order(
+                    symbol, order['side'], original_amount, None, 
+                    sl_price=original_sl, tp_price=original_tp, 
+                    price=original_price, order_type='limit'
+                )
+                logger.info(f"Rollback successful: Restored order for {symbol}")
+            except Exception as rollback_e:
+                logger.critical(f"FATAL: Rollback failed! Order {original_id} lost. Error: {rollback_e}")
+            
+            return False
 
     async def cancel_all_orders(self, symbol):
         """Cancels all open orders (Limit, TP, SL) for a specific symbol."""
