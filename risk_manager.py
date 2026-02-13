@@ -10,8 +10,8 @@ class RiskManager:
         self.max_leverage = max_leverage
 
     def calculate_position_size(self, current_balance):
-        """Calculates 15% margin of the LIVE compounding balance."""
-        return current_balance * 0.15
+        """Calculates 10% margin of the LIVE compounding balance."""
+        return current_balance * 0.10
 
     def calculate_leverage(self, entry_price, sl_price):
         """

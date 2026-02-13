@@ -5,7 +5,7 @@ from config import TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_CHANNEL_ID, NOTI
 from parser import parse_message
 from risk_manager import RiskManager
 from exchange_handler import ExchangeHandler
-from database import store_trade, get_trade_by_msg_id, update_trade_order_id, update_trade_sl, close_trade_db, get_open_trade_count, get_all_open_trades, get_recent_trades
+from database import store_trade, get_trade_by_msg_id, update_trade_order_id, update_trade_sl, close_trade_db, get_open_trade_count, get_all_open_trades, get_recent_trades, reserve_trade, update_trade_full
 from notifier import Notifier
 
 logger = logging.getLogger(__name__)
@@ -112,11 +112,24 @@ class TelegramListener:
         
         if data['type'] == 'TRADE_CALL':
             # Check DB to allow edits ONLY if we haven't processed this msg_id yet
-            existing_trade = await get_trade_by_msg_id(msg_id)
-            if existing_trade:
-                logger.info(f"Ignored duplicate/edited TRADE_CALL {msg_id} (Already processed).")
+            # Determine symbol from data to store in reserve
+            symbol = data.get('symbol', 'UNKNOWN')
+            
+            # ATTEMPT TO RESERVE TRADE ID FIRST (Prevents Race Conditions)
+            is_reserved = await reserve_trade(msg_id, symbol)
+            
+            if not is_reserved:
+                # Could be a duplicate OR an edit to an existing trade.
+                # If existing, check if we should allow edit (not implemented complex logic yet), 
+                # but generally we ignore duplicates to prevent double execution.
+                logger.info(f"Ignored duplicate/edited TRADE_CALL {msg_id} (Already processed/reserved).")
             else:
-                await self.handle_trade_call(msg_id, data, is_mock)
+                try:
+                    await self.handle_trade_call(msg_id, data, is_mock)
+                except Exception as e:
+                    logger.error(f"Error handling trade call {msg_id}: {e}")
+                    # Optional: Release reservation or mark as FAILED?
+                    # For now, it stays as PROCESSING which blocks retries, which is safer than double execution.
 
         elif data['type'] == 'UPDATE':
             await self.handle_update(msg_id, data, reply_msg_id=reply_msg.id if reply_msg else None, is_mock=is_mock)
@@ -219,7 +232,7 @@ class TelegramListener:
             )
             # Store in DB as mock? Or skip?
             # Storing allows testing updates. Let's store with status "MOCK"
-            await store_trade(msg_id, "MOCK_ORDER_ID", symbol, entry_price, sl_price, tp_price=tp_price, status="MOCK")
+            await update_trade_full(msg_id, "MOCK_ORDER_ID", symbol, entry_price, sl_price, tp_price=tp_price, status="MOCK")
             return
 
         amount = (position_size_usdt * leverage) / exec_price
@@ -230,7 +243,8 @@ class TelegramListener:
             order = await self.exchange.place_order(symbol, side, amount, leverage, sl_price=sl_price, tp_price=tp_price, price=exec_price if action == 'LIMIT' else None, order_type=action)
             
             if order:
-                await store_trade(msg_id, order['id'], symbol, entry_price, sl_price, tp_price=tp_price, status="OPEN")
+                # UPDATE the reserved trade (PROCESSING -> OPEN)
+                await update_trade_full(msg_id, order['id'], symbol, entry_price, sl_price, tp_price=tp_price, status="OPEN")
                 await self.notifier.send(f"🟢 {action} Order Opened: {symbol} at {exec_price} with {leverage}x.\n**TP:** {tp_display}\n**SL:** {sl_price}\nReason: {reason}")
             else:
                 # Should not happen if place_order raises on error, but handled for safety

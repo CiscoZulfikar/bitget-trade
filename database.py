@@ -56,6 +56,37 @@ async def store_trade(message_id, order_id, symbol, entry_price, sl_price, tp_pr
         ''', (message_id, order_id, symbol, entry_price, sl_price, tp_price, status, ts_str))
         await db.commit()
 
+async def reserve_trade(message_id, symbol):
+    """Reserve a trade ID to prevent double execution. Returns True if successful."""
+    # Current Time (UTC) -> WIB (UTC+7)
+    from datetime import datetime, timezone, timedelta
+    tz_wib = timezone(timedelta(hours=7))
+    now_wib = datetime.now(timezone.utc).astimezone(tz_wib)
+    ts_str = now_wib.strftime('%Y-%m-%d %H:%M:%S')
+
+    try:
+        async with aiosqlite.connect(DB_NAME) as db:
+            await db.execute('''
+                INSERT INTO trades (message_id, symbol, status, timestamp)
+                VALUES (?, ?, 'PROCESSING', ?)
+            ''', (message_id, symbol, ts_str))
+            await db.commit()
+        return True
+    except Exception as e:
+        # Likely UNIQUE constraint failed -> Trade already exists
+        logger.warning(f"Failed to reserve trade {message_id}: {e}")
+        return False
+
+async def update_trade_full(message_id, order_id, symbol, entry_price, sl_price, tp_price=None, status="OPEN"):
+    """Update a reserved trade with full details."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute('''
+            UPDATE trades 
+            SET order_id = ?, symbol = ?, entry_price = ?, sl_price = ?, tp_price = ?, status = ?
+            WHERE message_id = ?
+        ''', (order_id, symbol, entry_price, sl_price, tp_price, status, message_id))
+        await db.commit()
+
 async def get_trade_by_msg_id(message_id):
     """Retrieve trade details by Telegram message ID."""
     async with aiosqlite.connect(DB_NAME) as db:
