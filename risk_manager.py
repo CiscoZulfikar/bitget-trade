@@ -10,25 +10,45 @@ class RiskManager:
         self.max_leverage = max_leverage
 
     def calculate_position_size(self, current_balance):
-        """Calculates 10% margin of the LIVE compounding balance."""
-        return current_balance * 0.10
+        """Calculates margin based on tiered balance structure."""
+        if current_balance <= 20000:
+            rate = 0.10
+        elif current_balance <= 40000:
+            rate = 0.09
+        elif current_balance <= 60000:
+            rate = 0.08
+        elif current_balance <= 80000:
+            rate = 0.07
+        elif current_balance <= 100000:
+            rate = 0.06
+        else:
+            rate = 0.05
+            
+        return current_balance * rate
 
     def calculate_leverage(self, entry_price, sl_price):
         """
-        Calculates leverage such that hitting SL resulted in 70% loss of margin.
-        Formula: Leverage = 0.70 / (% distance to SL)
+        Calculates leverage such that if SL is hit, loss is ~50% of MARGIN.
+        Includes a 10% Safety Buffer on the SL distance to account for slippage.
         """
-        if entry_price == 0:
-            return 1
+        if entry_price == 0: return 1
         
-        distance_percent = abs(entry_price - sl_price) / entry_price
+        # 1. Calculate Raw Risk % (Distance to SL)
+        risk_pct = abs(entry_price - sl_price) / entry_price
         
-        if distance_percent == 0:
-            return self.max_leverage
+        # 2. Apply Slippage Buffer (Assume SL is 10% actual worse than chart)
+        # This effectively lowers leverage to ensure safety during bad execution.
+        safe_risk_pct = risk_pct * 1.10 
+        
+        if safe_risk_pct == 0: return 1
 
-        raw_leverage = self.leverage_loss_cap / distance_percent
-        leverage = min(int(raw_leverage), self.max_leverage)
-        return max(1, leverage)
+        # 3. Calculate Leverage: Target Loss % / Safe Risk %
+        # leverage * safe_risk_pct = leverage_loss_cap
+        leverage = self.leverage_loss_cap / safe_risk_pct
+        
+        # 4. Round and Cap
+        leverage = math.floor(leverage)
+        return max(1, min(int(leverage), self.max_leverage))
 
     def determine_entry_action(self, signal_entry, current_market_price, explicit_order_type='MARKET'):
         """
