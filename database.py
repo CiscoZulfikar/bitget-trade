@@ -34,6 +34,10 @@ async def init_db():
             await db.execute('ALTER TABLE trades ADD COLUMN timestamp DATETIME')
         except:
             pass
+        try:
+            await db.execute('ALTER TABLE trades ADD COLUMN closed_timestamp DATETIME')
+        except:
+            pass
         await db.commit()
     logger.info("Database initialized.")
 
@@ -93,10 +97,6 @@ async def get_trade_by_msg_id(message_id):
         async with db.execute('SELECT * FROM trades WHERE message_id = ?', (message_id,)) as cursor:
             row = await cursor.fetchone()
             if row:
-                # Handle varying schema if robust columns managed by row_factory or index
-                # Basic fetch with index might be risky if columns added in middle, but we appended.
-                # Safer to use row_factory or access by index assuming append.
-                # Schema: msg_id, order_id, symbol, entry, sl, tp, status, exit, pnl, timestamp
                 return {
                     "message_id": row[0],
                     "order_id": row[1],
@@ -105,7 +105,6 @@ async def get_trade_by_msg_id(message_id):
                     "sl_price": row[4],
                     "tp_price": row[5],
                     "status": row[6]
-                    # We can add others but existing consumers might not need them yet
                 }
             return None
 
@@ -120,11 +119,17 @@ async def update_trade_sl(message_id, sl_price):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute('UPDATE trades SET sl_price = ? WHERE message_id = ?', (sl_price, message_id))
         await db.commit()
-        
+
 async def close_trade_db(message_id, exit_price=0.0, pnl=0.0):
     """Mark a trade as CLOSED in the DB with PnL data."""
+    # Current Time (UTC) -> WIB (UTC+7)
+    from datetime import datetime, timezone, timedelta
+    tz_wib = timezone(timedelta(hours=7))
+    now_wib = datetime.now(timezone.utc).astimezone(tz_wib)
+    ts_str = now_wib.strftime('%Y-%m-%d %H:%M:%S')
+
     async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute('UPDATE trades SET status = "CLOSED", exit_price = ?, pnl = ? WHERE message_id = ?', (exit_price, pnl, message_id))
+        await db.execute('UPDATE trades SET status = "CLOSED", exit_price = ?, pnl = ?, closed_timestamp = ? WHERE message_id = ?', (exit_price, pnl, ts_str, message_id))
         await db.commit()
 
 async def get_open_trade_count():
@@ -172,7 +177,8 @@ async def get_recent_trades(limit=20):
                     "status": row["status"],
                     "timestamp": row["timestamp"],
                     "exit_price": row["exit_price"],
-                    "pnl": row["pnl"]
+                    "pnl": row["pnl"],
+                    "closed_timestamp": row.keys().__contains__("closed_timestamp") and row["closed_timestamp"] or None
                 })
             return trades
 

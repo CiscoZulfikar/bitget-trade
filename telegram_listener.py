@@ -55,8 +55,8 @@ class TelegramListener:
                 elif text_upper in ["DATABASE", "/DATABASE", "/DB", "DB"]:
                     await self.send_database_records()
                     return
-                elif text_upper in ["/CLEAR_DATABASE", "/CLEARDB"]:
-                    await self.clear_database()
+                elif text_upper.startswith("CLEAR_DATABASE") or text_upper.startswith("/CLEAR_DATABASE") or text_upper.startswith("CLEARDB") or text_upper.startswith("/CLEARDB"):
+                    await self.clear_database(text_upper)
                     return
 
                 logger.info(f"Received DM from Admin. Processing Signal.")
@@ -279,6 +279,24 @@ class TelegramListener:
         except Exception as e:
             logger.error(f"Execution failed for {symbol}: {e}")
             await self.notifier.send(f"⚠️ Execution failed for {symbol}:\n`{str(e)}`")
+
+    # ... (Rest of monitor_trade_updates, handle_update etc. - unchanged) ...
+
+    # Update send_performance_stats above this line...
+    # Update clear_database below...
+            
+    async def clear_database(self, command_text=""):
+        """Clears all trades (Requires Confirmation)."""
+        # Parse command: /cleardb [confirm]
+        args = command_text.split()
+        if len(args) > 1 and args[1].upper() == "CONFIRM":
+            try:
+                await clear_all_trades()
+                await self.notifier.send("🗑️ **Database Cleared.** All trade history has been wiped.")
+            except Exception as e:
+                await self.notifier.send(f"⚠️ Failed to clear database: {e}")
+        else:
+            await self.notifier.send("⚠️ **Caution:** This will wipe all trade history.\nTo proceed, type: `/cleardb confirm`")
 
     async def handle_update(self, msg_id, data, reply_msg_id=None, is_mock=False):
         # 1. Try to get symbol from Parser (if specific coin mentioned)
@@ -695,8 +713,11 @@ class TelegramListener:
                         try:
                             open_trades = await get_all_open_trades()
                             # Find the trade for this symbol
+                            # Normalization: BTC/USDT:USDT -> BTCUSDT
+                            normalized_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
+                            
                             # We might have multiple if bugged, but usually one OPEN per symbol
-                            target_trade = next((t for t in open_trades if t['symbol'] == symbol), None)
+                            target_trade = next((t for t in open_trades if t['symbol'] == normalized_symbol or t['symbol'] == symbol), None)
                             
                             if target_trade:
                                 await close_trade_db(target_trade['message_id'], exit_price=price, pnl=pnl)
@@ -721,29 +742,28 @@ class TelegramListener:
                 await self.notifier.send("📭 Database is empty.")
                 return
             
-            msg = "📚 **Trade History**\n\n"
+            msg = "📚 **Trade History (Last 20)**\n\n"
             
             for t in trades:
-                status_icon = {
-                    "OPEN": "🟢",
-                    "CLOSED": "🔴",
-                    "MOCK": "🧪",
-                    "PROCESSING": "⏳"
-                }.get(t['status'], "❓")
-                
-                # Format timestamp
-                raw_ts = str(t['timestamp'])
-                try:
-                    time_part = raw_ts.split(' ')[1].split('+')[0].split('.')[0]
-                    ts_display = f"{time_part} WIB"
-                except:
-                    ts_display = raw_ts
+                # Format Timestamps
+                def fmt_ts(raw):
+                    if not raw: return "?"
+                    # raw is "YYYY-MM-DD HH:MM:SS" (WIB)
+                    return str(raw) # Return full string with seconds
+
+                start_ts = fmt_ts(t.get('timestamp'))
+                end_ts = fmt_ts(t.get('closed_timestamp')) if t['status'] == "CLOSED" else None
+
+                # Header Construction
+                header = f"🟢 [OPEN] **{t['symbol']}**"
+                if t['status'] == "CLOSED":
+                     header = f"🔴 [CLOSED] **{t['symbol']}**"
 
                 # Basic Info
                 row_msg = (
-                    f"{status_icon} **{t['symbol']}**\n"
-                    # f"   🆔 `{t['order_id']}`\n" # Hide ID to save space
+                    f"{header}\n"
                     f"   entry: {t['entry_price']} | SL: {t['sl_price']}\n"
+                    f"   🕒 Open: {start_ts}\n"
                 )
                 
                 # Closed details
@@ -766,8 +786,10 @@ class TelegramListener:
                         pass
 
                     row_msg += f"   🏁 Exit: {exit_p} | PnL: ${pnl:.2f}{r_display}\n"
+                    if end_ts:
+                         row_msg += f"   🕒 Close: {end_ts}\n"
                 
-                row_msg += f"   📅 {ts_display}\n\n"
+                row_msg += "\n"
                 msg += row_msg
             
             if len(msg) > 4000:
@@ -858,13 +880,18 @@ class TelegramListener:
             logger.error(f"Stats Error: {e}")
             await self.notifier.send(f"⚠️ Error fetching stats: {e}")
             
-    async def clear_database(self):
-        """Clears all trades."""
-        try:
-            await clear_all_trades()
-            await self.notifier.send("🗑️ **Database Cleared.** All trade history has been wiped.")
-        except Exception as e:
-            await self.notifier.send(f"⚠️ Failed to clear database: {e}")
+    async def clear_database(self, command_text=""):
+        """Clears all trades (Requires Confirmation)."""
+        # Parse command: /cleardb [confirm]
+        args = command_text.split()
+        if len(args) > 1 and args[1].upper() == "CONFIRM":
+            try:
+                await clear_all_trades()
+                await self.notifier.send("🗑️ **Database Cleared.** All trade history has been wiped.")
+            except Exception as e:
+                await self.notifier.send(f"⚠️ Failed to clear database: {e}")
+        else:
+            await self.notifier.send("⚠️ **Caution:** This will wipe all trade history.\nTo proceed, type: `/cleardb confirm`")
 
     async def send_help(self):
         msg = (
