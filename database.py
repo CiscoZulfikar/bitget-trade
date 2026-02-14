@@ -170,6 +170,177 @@ async def get_recent_trades(limit=20):
                     "sl_price": row["sl_price"],
                     "tp_price": row["tp_price"],
                     "status": row["status"],
-                    "timestamp": row["timestamp"]
+                    "timestamp": row["timestamp"],
+                    "exit_price": row["exit_price"],
+                    "pnl": row["pnl"]
                 })
             return trades
+
+async def get_stats_report():
+    """
+    Calculates Win Rate and Total R for:
+    - Current Month, Previous Month
+    - Current Quarter, Previous Quarter
+    - Current Year, Previous Year
+    - Lifetime
+    Returns a dict with breakdown and labels.
+    """
+    from datetime import datetime, timedelta
+    
+    # Define periods
+    now = datetime.utcnow()
+    # Shift to WIB (UTC+7)
+    now_wib = now + timedelta(hours=7)
+    
+    # Dates
+    curr_month_start = now_wib.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    
+    last_day_prev_month = curr_month_start - timedelta(days=1)
+    prev_month_start = last_day_prev_month.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    
+    q_month = (now_wib.month - 1) // 3 * 3 + 1
+    curr_quarter_start = now_wib.replace(month=q_month, day=1, hour=0, minute=0, second=0, microsecond=0)
+    
+    last_day_prev_quarter = curr_quarter_start - timedelta(days=1)
+    prev_q_month = (last_day_prev_quarter.month - 1) // 3 * 3 + 1
+    prev_quarter_start = last_day_prev_quarter.replace(month=prev_q_month, day=1, hour=0, minute=0, second=0, microsecond=0)
+    
+    curr_year_start = now_wib.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    prev_year_start = curr_year_start.replace(year=curr_year_start.year - 1)
+    prev_year_end = curr_year_start - timedelta(seconds=1)
+
+    # Labels
+    def get_q_label(date):
+        q = (date.month - 1) // 3 + 1
+        return f"Q{q} {date.year}"
+
+    labels = {
+        "monthly": now_wib.strftime("%b %Y"),
+        "prev_monthly": last_day_prev_month.strftime("%b %Y"),
+        "quarterly": get_q_label(now_wib),
+        "prev_quarterly": get_q_label(last_day_prev_quarter),
+        "yearly": now_wib.strftime("%Y"),
+        "prev_yearly": prev_year_start.strftime("%Y"),
+        "lifetime": "Lifetime"
+    }
+
+    stats = {k: {"label": v, "wins": 0, "total": 0, "total_r": 0.0} for k, v in labels.items()}
+
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute('SELECT * FROM trades WHERE status = "CLOSED" AND pnl IS NOT NULL') as cursor:
+            rows = await cursor.fetchall()
+            
+            for row in rows:
+                try:
+                    ts_str = str(row['timestamp'])
+                    if '.' in ts_str: ts_str = ts_str.split('.')[0]
+                    trade_date = datetime.strptime(ts_str, '%Y-%m-%d %H:%M:%S')
+                except:
+                    continue
+
+                # Basic Data
+                entry = float(row['entry_price'] or 0)
+                exit_px = float(row['exit_price'] or 0)
+                sl = float(row['sl_price'] or 0)
+                pnl = float(row['pnl'] or 0)
+                
+                if entry == 0 or sl == 0: continue
+
+                direction = "LONG" if sl < entry else "SHORT"
+                risk = abs(entry - sl)
+                if risk == 0: continue
+                
+                r_value = 0.0
+                if direction == "LONG":
+                    r_value = (exit_px - entry) / risk
+                else:
+                    r_value = (entry - exit_px) / risk
+                
+                if r_value > 20 or r_value < -20: r_value = 0
+                
+                is_win = pnl > 0
+                
+                def update(key):
+                    stats[key]['total'] += 1
+                    if is_win: stats[key]['wins'] += 1
+                    stats[key]['total_r'] += r_value
+
+                # Lifetime
+                update('lifetime')
+                
+                # Monthly
+                if trade_date >= curr_month_start:
+                    update('monthly')
+                elif prev_month_start <= trade_date < curr_month_start:
+                    update('prev_monthly')
+                    
+                # Quarterly
+                if trade_date >= curr_quarter_start:
+                    update('quarterly')
+                elif prev_quarter_start <= trade_date < curr_quarter_start:
+                    update('prev_quarterly')
+                    
+                # Yearly
+                if trade_date >= curr_year_start:
+                    update('yearly')
+                elif prev_year_start <= trade_date <= prev_year_end:
+                    update('prev_yearly')
+
+    return stats
+
+async def get_monthly_stats(month, year):
+    """
+    Get stats for a specific month and year.
+    month: 1-12 (int)
+    year: e.g. 2026 (int)
+    """
+    from datetime import datetime, timedelta
+    import calendar
+    
+    start_date = datetime(year, month, 1)
+    # End date calculation
+    last_day = calendar.monthrange(year, month)[1]
+    end_date = datetime(year, month, last_day, 23, 59, 59)
+    
+    label = start_date.strftime("%B %Y")
+    stat = {"label": label, "wins": 0, "total": 0, "total_r": 0.0}
+    
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute('SELECT * FROM trades WHERE status = "CLOSED" AND pnl IS NOT NULL') as cursor:
+            rows = await cursor.fetchall()
+            for row in rows:
+                try:
+                    ts_str = str(row['timestamp'])
+                    if '.' in ts_str: ts_str = ts_str.split('.')[0]
+                    trade_date = datetime.strptime(ts_str, '%Y-%m-%d %H:%M:%S')
+                except:
+                    continue
+                    
+                if start_date <= trade_date <= end_date:
+                    entry = float(row['entry_price'] or 0)
+                    exit_px = float(row['exit_price'] or 0)
+                    sl = float(row['sl_price'] or 0)
+                    pnl = float(row['pnl'] or 0)
+                    
+                    if entry == 0 or sl == 0: continue
+                    direction = "LONG" if sl < entry else "SHORT"
+                    risk = abs(entry - sl)
+                    if risk == 0: continue
+                    r_value = (exit_px - entry) / risk if direction == "LONG" else (entry - exit_px) / risk
+                    
+                    if r_value > 20 or r_value < -20: r_value = 0
+                    
+                    stat['total'] += 1
+                    if pnl > 0: stat['wins'] += 1
+                    stat['total_r'] += r_value
+                    
+    return stat
+
+async def clear_all_trades():
+    """Wipes all trade history."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute('DELETE FROM trades')
+        await db.commit()
+    return True

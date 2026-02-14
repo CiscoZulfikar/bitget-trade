@@ -5,7 +5,7 @@ from config import TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_CHANNEL_ID, NOTI
 from parser import parse_message
 from risk_manager import RiskManager
 from exchange_handler import ExchangeHandler
-from database import store_trade, get_trade_by_msg_id, update_trade_order_id, update_trade_sl, close_trade_db, get_open_trade_count, get_all_open_trades, get_recent_trades, reserve_trade, update_trade_full
+from database import store_trade, get_trade_by_msg_id, update_trade_order_id, update_trade_sl, close_trade_db, get_open_trade_count, get_all_open_trades, get_recent_trades, reserve_trade, update_trade_full, get_stats_report, get_monthly_stats, clear_all_trades
 from notifier import Notifier
 
 logger = logging.getLogger(__name__)
@@ -49,8 +49,14 @@ class TelegramListener:
                 elif text_upper in ["MARKET", "/MARKET"]:
                     await self.send_market_update()
                     return
+                elif text_upper.startswith("PERFORMANCE") or text_upper.startswith("/PERFORMANCE") or text_upper.startswith("STATS") or text_upper.startswith("/STATS"):
+                    await self.send_performance_stats(event.message.message)
+                    return
                 elif text_upper in ["DATABASE", "/DATABASE", "/DB", "DB"]:
                     await self.send_database_records()
+                    return
+                elif text_upper in ["/CLEAR_DATABASE", "/CLEARDB"]:
+                    await self.clear_database()
                     return
 
                 logger.info(f"Received DM from Admin. Processing Signal.")
@@ -225,27 +231,48 @@ class TelegramListener:
                 f"Action: {action} {direction} {symbol}\n"
                 f"**Entry:** {exec_price}\n"
                 f"**Leverage:** {leverage}x\n"
-                f"**Size:** ${position_size_usdt:.2f} ({15}% of ${balance:.2f} Free)\n"
+                f"**Size:** ${position_size_usdt:.2f} ({15 if balance <= 20000 else 'Tiered'}% Margin)\n"
                 f"**TP:** {tp_display}\n"
                 f"**SL:** {sl_price}\n"
                 f"**Reason:** {reason}"
             )
-            # Store in DB as mock? Or skip?
             # Storing allows testing updates. Let's store with status "MOCK"
             await update_trade_full(msg_id, "MOCK_ORDER_ID", symbol, entry_price, sl_price, tp_price=tp_price, status="MOCK")
             return
 
         amount = (position_size_usdt * leverage) / exec_price
         side = 'buy' if direction.upper() == 'LONG' else 'sell'
-        logger.info(f"Placing {action} {direction} on {symbol} x{leverage}. TP: {tp_price}, SL: {sl_price}")
+        
+        # SAFETY: Convert MARKET to MARKETABLE LIMIT (1% Slippage)
+        final_order_type = action
+        final_price = exec_price
+        
+        if action == 'MARKET':
+             final_order_type = 'LIMIT'
+             slippage = 0.01 # 1%
+             if side == 'buy':
+                 final_price = market_price * (1 + slippage)
+             else:
+                 final_price = market_price * (1 - slippage)
+             logger.info(f"🛡️ Converted MARKET -> LIMIT for Safety. Price: {market_price} -> {final_price:.5f} (1% Buffer)")
+
+        logger.info(f"Placing {final_order_type} {direction} on {symbol} x{leverage}. Price: {final_price}, TP: {tp_price}, SL: {sl_price}")
         
         try:
-            order = await self.exchange.place_order(symbol, side, amount, leverage, sl_price=sl_price, tp_price=tp_price, price=exec_price if action == 'LIMIT' else None, order_type=action)
+            # We always pass 'limit' as order_type if we converted it
+            order_type_str = final_order_type.lower()
+            
+            order = await self.exchange.place_order(
+                symbol, side, amount, leverage, 
+                sl_price=sl_price, tp_price=tp_price, 
+                price=final_price, 
+                order_type=order_type_str
+            )
             
             if order:
                 # UPDATE the reserved trade (PROCESSING -> OPEN)
                 await update_trade_full(msg_id, order['id'], symbol, entry_price, sl_price, tp_price=tp_price, status="OPEN")
-                await self.notifier.send(f"🟢 {action} Order Opened: {symbol} at {exec_price} with {leverage}x.\n**TP:** {tp_display}\n**SL:** {sl_price}\nReason: {reason}")
+                await self.notifier.send(f"🟢 {final_order_type} Order Opened: {symbol} at {exec_price} with {leverage}x.\n**TP:** {tp_display}\n**SL:** {sl_price}\n**Margin:** ${position_size_usdt:.2f}\nReason: {reason}")
             else:
                 # Should not happen if place_order raises on error, but handled for safety
                 await self.notifier.send(f"⚠️ Execution failed for {symbol} (Unknown reason/None returned).")
@@ -694,39 +721,54 @@ class TelegramListener:
                 await self.notifier.send("📭 Database is empty.")
                 return
             
-            msg = "📚 **Database Records (Last 20)**\n\n"
+            msg = "📚 **Trade History**\n\n"
             
             for t in trades:
                 status_icon = {
                     "OPEN": "🟢",
-                    "CLOSED": "aaa", # Keep same icon? Maybe 🔴 or 🏁
-                    "MOCK": "🧪"
+                    "CLOSED": "🔴",
+                    "MOCK": "🧪",
+                    "PROCESSING": "⏳"
                 }.get(t['status'], "❓")
-                if t['status'] == "CLOSED": status_icon = "🔴"
                 
                 # Format timestamp
-                # Input: "2026-02-10 13:13:00.245070+00:00" or similar
-                # Desired: "13:13:00 WIB"
                 raw_ts = str(t['timestamp'])
                 try:
-                    # Quick robust parsing: Split by space, take time part, remove ms/+
-                    # "2026-02-10 13:13:00.245070+00:00" -> "13:13:00.245070+00:00"
-                    time_part = raw_ts.split(' ')[1] 
-                    # Remove potential +OFFSET
-                    time_part = time_part.split('+')[0]
-                    # Remove milliseconds
-                    time_part = time_part.split('.')[0]
+                    time_part = raw_ts.split(' ')[1].split('+')[0].split('.')[0]
                     ts_display = f"{time_part} WIB"
                 except:
-                    ts_display = raw_ts # Fallback
-                
-                msg += (
-                    f"{status_icon} **{t['symbol']}** ({t['status']})\n"
-                    f"   🆔 `{t['order_id']}`\n"
-                    f"   💰 Entry: {t['entry_price']} | SL: {t['sl_price']}\n"
-                    f"   📅 {ts_display}\n"
-                    f"   -------------------------\n"
+                    ts_display = raw_ts
+
+                # Basic Info
+                row_msg = (
+                    f"{status_icon} **{t['symbol']}**\n"
+                    # f"   🆔 `{t['order_id']}`\n" # Hide ID to save space
+                    f"   entry: {t['entry_price']} | SL: {t['sl_price']}\n"
                 )
+                
+                # Closed details
+                if t['status'] == "CLOSED":
+                    exit_p = t.get('exit_price', 0)
+                    pnl = t.get('pnl', 0)
+                    
+                    # Calculate R for display
+                    r_display = ""
+                    try:
+                        entry = float(t['entry_price'])
+                        sl = float(t['sl_price'])
+                        exit_px = float(exit_p or 0)
+                        if entry != sl and exit_px > 0:
+                            risk = abs(entry - sl)
+                            direction = 1 if sl < entry else -1
+                            r_val = (exit_px - entry) / risk * direction
+                            r_display = f" | R: {r_val:.2f}"
+                    except:
+                        pass
+
+                    row_msg += f"   🏁 Exit: {exit_p} | PnL: ${pnl:.2f}{r_display}\n"
+                
+                row_msg += f"   📅 {ts_display}\n\n"
+                msg += row_msg
             
             if len(msg) > 4000:
                 msg = msg[:4000] + "\n...(truncated)"
@@ -736,4 +778,105 @@ class TelegramListener:
         except Exception as e:
             logger.error(f"DB Fetch failed: {e}")
             await self.notifier.send(f"⚠️ Error fetching history: {e}")
+
+    async def send_performance_stats(self, command_text):
+        """Sends performance stats report."""
+        try:
+            # Parse Args: /performance [month] [year]
+            parts = command_text.strip().split()
+            
+            if len(parts) > 1:
+                # Custom Lookup
+                try:
+                    import datetime
+                    # simple parsing
+                    # Case 1: "April 2026"
+                    # Case 2: "04 2026"
+                    month_str = parts[1]
+                    year_str = parts[2] if len(parts) > 2 else str(datetime.datetime.now().year)
+                    
+                    # Map Month Name to Int
+                    month_map = {
+                        "JAN": 1, "JANUARY": 1, "FEB": 2, "FEBRUARY": 2, "MAR": 3, "MARCH": 3,
+                        "APR": 4, "APRIL": 4, "MAY": 5, "JUN": 6, "JUNE": 6, "JUL": 7, "JULY": 7,
+                        "AUG": 8, "AUGUST": 8, "SEP": 9, "SEPTEMBER": 9, "OCT": 10, "OCTOBER": 10,
+                        "NOV": 11, "NOVEMBER": 11, "DEC": 12, "DECEMBER": 12
+                    }
+                    
+                    month = 0
+                    if month_str.upper() in month_map:
+                        month = month_map[month_str.upper()]
+                    else:
+                        month = int(month_str)
+                        
+                    year = int(year_str)
+                    
+                    stat = await get_monthly_stats(month, year)
+                    
+                    total = stat['total']
+                    wins = stat['wins']
+                    wr = (wins / total * 100) if total > 0 else 0
+                    r_sum = stat['total_r']
+                    
+                    msg = (
+                        f"📊 **Performance: {stat['label']}**\n"
+                        f"--------------------------\n"
+                        f"🏆 **Win Rate:** {wr:.1f}% ({wins}/{total})\n"
+                        f"💎 **Total R:** {r_sum:.2f}\n"
+                    )
+                    await self.notifier.send(msg)
+                    return
+                    
+                except Exception as e:
+                    await self.notifier.send(f"⚠️ Invalid format. Use: `/performance April 2026` or `/performance`")
+                    return
+
+            # Default: Dashboard
+            stats = await get_stats_report()
+            
+            def fmt_stat(key):
+                data = stats[key]
+                label = data['label']
+                total = data['total']
+                wins = data['wins']
+                wr = (wins / total * 100) if total > 0 else 0
+                r_sum = data['total_r']
+                return f"**{label}:** WR {wr:.1f}% ({wins}/{total}) | R: {r_sum:.2f}"
+                
+            msg = "📊 **Performance Dashboard**\n\n"
+            msg += fmt_stat('monthly') + "\n"
+            msg += fmt_stat('prev_monthly') + "\n\n"
+            msg += fmt_stat('quarterly') + "\n"
+            msg += fmt_stat('prev_quarterly') + "\n\n"
+            msg += fmt_stat('yearly') + "\n"
+            msg += fmt_stat('prev_yearly') + "\n\n"
+            msg += fmt_stat('lifetime') + "\n"
+            
+            await self.notifier.send(msg)
+
+        except Exception as e:
+            logger.error(f"Stats Error: {e}")
+            await self.notifier.send(f"⚠️ Error fetching stats: {e}")
+            
+    async def clear_database(self):
+        """Clears all trades."""
+        try:
+            await clear_all_trades()
+            await self.notifier.send("🗑️ **Database Cleared.** All trade history has been wiped.")
+        except Exception as e:
+            await self.notifier.send(f"⚠️ Failed to clear database: {e}")
+
+    async def send_help(self):
+        msg = (
+            "🤖 **Trading Bot Commands**\n\n"
+            "**/status** - System status & PnL\n"
+            "**/trades** - Open positions details\n"
+            "**/database** - Last 20 trade entries\n"
+            "**/performance** - Win Rate & R Dashboard\n"
+            "**/performance [Month] [Year]** - Specific month stats\n"
+            "**/cleardb** - Wipe all trade history\n"
+            "**/market** - BTC Price Check\n"
+            "**/help** - Show this menu\n"
+        )
+        await self.notifier.send(msg)
 
