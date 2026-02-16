@@ -810,7 +810,7 @@ class TelegramListener:
                 # Basic Info
                 row_msg = (
                     f"{header}\n"
-                    f"   entry: {t['entry_price']} | SL: {t['sl_price']}\n"
+                    f"   🌐 Entry: {t['entry_price']} | SL: {t['sl_price']}\n"
                     f"   🕒 Open: {start_ts}\n"
                 )
                 
