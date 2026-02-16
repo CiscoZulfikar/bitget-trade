@@ -373,7 +373,7 @@ class TelegramListener:
                          # Smart Breakeven: Entry + 0.1% buffer on profit side
                          real_entry = float(position['entryPrice'])
                          pos_side = position.get('side', '').lower()
-                         buffer_pct = 0.001  # 0.1% gap to cover fees
+                         buffer_pct = 0.0013  # 0.13% gap to cover fees
                          
                          if pos_side == 'long':
                              new_sl = real_entry * (1 + buffer_pct)
