@@ -695,33 +695,39 @@ class ExchangeHandler:
                 return False, "No active position or open limit order found."
 
             side = pos['side']
-            size = pos['contracts'] # Needed for PlaceTpslOrder
+            size = pos['contracts']
             raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
+            
+            # FORMAT PRICE
+            trigger_price = self.exchange.price_to_precision(symbol, new_tp)
 
-            # 2. Cancel Existing TP Orders (profit_plan)
-            try:
-                if hasattr(self.exchange, 'privateMixGetV2MixOrderOrdersPlanPending'):
-                    params = {
-                        "symbol": raw_symbol,
-                        "productType": "USDT-FUTURES",
-                        "planType": "profit_plan"
-                    }
-                    resp = await self.exchange.privateMixGetV2MixOrderOrdersPlanPending(params)
+            # 2. Cancel Existing TP Orders (profit_plan AND pos_profit)
+            # We iterate multiple types to be safe
+            for p_type in ['profit_plan', 'pos_profit']:
+                try:
+                    if hasattr(self.exchange, 'privateMixGetV2MixOrderOrdersPlanPending'):
+                        params = {
+                            "symbol": raw_symbol,
+                            "productType": "USDT-FUTURES",
+                            "planType": p_type
+                        }
+                        resp = await self.exchange.privateMixGetV2MixOrderOrdersPlanPending(params)
 
-                    if resp['code'] == '00000' and 'entrustedList' in resp['data']:
-                        for o in resp['data']['entrustedList']:
-                            oid = o['orderId']
-                            # Cancel
-                            cancel_params = {
-                                "symbol": raw_symbol,
-                                "productType": "USDT-FUTURES",
-                                "orderId": oid,
-                                "planType": "profit_plan"
-                            }
-                            await self.exchange.privateMixPostV2MixOrderCancelPlanOrder(cancel_params)
-                            logger.info(f"Cancelled old TP order {oid} for {symbol}")
-            except Exception as e:
-                logger.warning(f"Error cancelling old TPs: {e}")
+                        if resp['code'] == '00000' and 'entrustedList' in resp['data']:
+                            for o in resp['data']['entrustedList']:
+                                oid = o['orderId']
+                                actual_type = o.get('planType', p_type) # Use actual type if present
+                                # Cancel
+                                cancel_params = {
+                                    "symbol": raw_symbol,
+                                    "productType": "USDT-FUTURES",
+                                    "orderId": oid,
+                                    "planType": actual_type
+                                }
+                                await self.exchange.privateMixPostV2MixOrderCancelPlanOrder(cancel_params)
+                                logger.info(f"Cancelled old TP order {oid} ({actual_type}) for {symbol}")
+                except Exception as e:
+                    logger.warning(f"Error cancelling old TPs ({p_type}): {e}")
 
             # 3. Place New TP using PlaceTpslOrder
             try:
@@ -729,7 +735,7 @@ class ExchangeHandler:
                     "symbol": raw_symbol,
                     "productType": "USDT-FUTURES",
                     "marginCoin": "USDT",
-                    "triggerPrice": str(new_tp),
+                    "triggerPrice": trigger_price,
                     "triggerType": "market_price",
                     "planType": "profit_plan",
                     "holdSide": "long" if side == "long" else "short",
@@ -737,7 +743,7 @@ class ExchangeHandler:
                 }
                 
                 await self.exchange.privateMixPostV2MixOrderPlaceTpslOrder(params)
-                logger.info(f"Placed new TP order for {symbol} at {new_tp} (Size: {size})")
+                logger.info(f"Placed new TP order for {symbol} at {trigger_price} (Size: {size})")
                 return True, "Success"
                 
             except Exception as e:
@@ -765,33 +771,38 @@ class ExchangeHandler:
                 return False, "No active position/order found."
 
             side = pos['side']
-            size = pos['contracts'] # Needed for PlaceTpslOrder
+            size = pos['contracts']
             raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
             
-            # 2. Cancel Old SLs (loss_plan)
-            try:
-                if hasattr(self.exchange, 'privateMixGetV2MixOrderOrdersPlanPending'):
-                    params = {
-                        "symbol": raw_symbol,
-                        "productType": "USDT-FUTURES",
-                        "planType": "loss_plan"
-                    }
-                    resp = await self.exchange.privateMixGetV2MixOrderOrdersPlanPending(params)
+            # FORMAT PRICE
+            trigger_price = self.exchange.price_to_precision(symbol, new_sl)
+            
+            # 2. Cancel Old SLs (loss_plan AND pos_loss)
+            for p_type in ['loss_plan', 'pos_loss']:
+                try:
+                    if hasattr(self.exchange, 'privateMixGetV2MixOrderOrdersPlanPending'):
+                        params = {
+                            "symbol": raw_symbol,
+                            "productType": "USDT-FUTURES",
+                            "planType": p_type
+                        }
+                        resp = await self.exchange.privateMixGetV2MixOrderOrdersPlanPending(params)
 
-                    if resp['code'] == '00000' and 'entrustedList' in resp['data']:
-                        for o in resp['data']['entrustedList']:
-                            oid = o['orderId']
-                            # Cancel
-                            cancel_params = {
-                                "symbol": raw_symbol,
-                                "productType": "USDT-FUTURES",
-                                "orderId": oid,
-                                "planType": "loss_plan"
-                            }
-                            await self.exchange.privateMixPostV2MixOrderCancelPlanOrder(cancel_params)
-                            logger.info(f"Cancelled old SL order {oid} for {symbol}")
-            except Exception as e:
-                logger.warning(f"Error cancelling old SLs: {e}")
+                        if resp['code'] == '00000' and 'entrustedList' in resp['data']:
+                            for o in resp['data']['entrustedList']:
+                                oid = o['orderId']
+                                actual_type = o.get('planType', p_type)
+                                # Cancel
+                                cancel_params = {
+                                    "symbol": raw_symbol,
+                                    "productType": "USDT-FUTURES",
+                                    "orderId": oid,
+                                    "planType": actual_type
+                                }
+                                await self.exchange.privateMixPostV2MixOrderCancelPlanOrder(cancel_params)
+                                logger.info(f"Cancelled old SL order {oid} ({actual_type}) for {symbol}")
+                except Exception as e:
+                    logger.warning(f"Error cancelling old SLs ({p_type}): {e}")
 
             # 3. Place New SL using PlaceTpslOrder
             try:
@@ -799,7 +810,7 @@ class ExchangeHandler:
                     "symbol": raw_symbol,
                     "productType": "USDT-FUTURES",
                     "marginCoin": "USDT",
-                    "triggerPrice": str(new_sl),
+                    "triggerPrice": trigger_price, # Use Formatted Price
                     "triggerType": "market_price",
                     "planType": "loss_plan",
                     "holdSide": "long" if side == "long" else "short",
@@ -807,7 +818,7 @@ class ExchangeHandler:
                 }
                 
                 await self.exchange.privateMixPostV2MixOrderPlaceTpslOrder(params)
-                logger.info(f"Placed new SL order for {symbol} at {new_sl} (Size: {size})")
+                logger.info(f"Placed new SL order for {symbol} at {trigger_price} (Size: {size})")
                 return True, "Success"
                 
             except Exception as e:
