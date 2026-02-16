@@ -18,10 +18,11 @@ async def main():
         'options': {'defaultType': 'swap'}
     })
     
-    print("Searching for TPSL / Plan methods...")
+    print("Searching for TPSL / Plan / Position methods...")
     methods = dir(exchange)
     
-    candidates = [m for m in methods if 'TPSL' in m or 'Plan' in m or 'place' in m.lower()] 
+    # Broader search
+    candidates = [m for m in methods if 'tpsl' in m.lower() or 'plan' in m.lower() or 'position' in m.lower() or 'stop' in m.lower()] 
     # Narrow down to private methods usually starting with private
     candidates = [m for m in candidates if 'private' in m]
     
