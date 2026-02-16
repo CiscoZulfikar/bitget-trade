@@ -48,17 +48,38 @@ async def main():
                             if entrusted:
                                 print(f"✅ FOUND ORDERS! Symbol={s}, Plan={plan}, Side={side}")
                                 for o in entrusted:
-                                    print(f" - ID: {o['orderId']}, Type: {o['planType']}, Trigger: {o['triggerPrice']}")
+                                    oid = o['orderId']
+                                    print(f" - ID: {oid}, Type: {o['planType']}, Trigger: {o['triggerPrice']}")
+                                    
+                                    # SEARCH AND DESTROY
+                                    print(f"   >>> ATTEMPTING TO CANCEL {oid}...")
+                                    try:
+                                        cancel_params = {
+                                            "symbol": s,
+                                            "productType": p_type,
+                                            "orderId": oid,
+                                            "planType": plan,
+                                            "marginCoin": "USDT",
+                                            "holdSide": side
+                                        }
+                                        c_resp = await exchange.privateMixPostV2MixOrderCancelPlanOrder(cancel_params)
+                                        if c_resp['code'] == '00000':
+                                            print(f"   ✅ DESTROYED {oid}")
+                                        else:
+                                            print(f"   ❌ FAILED TO DESTROY: {c_resp['msg']}")
+                                    except Exception as ce:
+                                        print(f"   ❌ EXCEPTION DURING DESTROY: {ce}")
+
                             else:
-                                print(f" - No orders (Clean response)")
+                                pass # Silent on clean
                         else:
-                            print(f" - Error: {resp['msg']} (Code: {resp['code']})")
+                            pass # Silent on clean
                     
                     except Exception as e:
                         if "40812" in str(e):
-                            print(f" - 40812: Type not met")
+                            pass # Common error, ignore
                         elif "40034" in str(e) or "40017" in str(e):
-                             print(f" - Param Error: {e}")
+                             pass
                         else:
                             print(f" - EXCEPTION: {e}")
 
