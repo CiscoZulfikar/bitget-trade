@@ -58,6 +58,9 @@ class TelegramListener:
                 elif text_upper.startswith("CLEAR_DATABASE") or text_upper.startswith("/CLEAR_DATABASE") or text_upper.startswith("CLEARDB") or text_upper.startswith("/CLEARDB"):
                     await self.clear_database(text_upper)
                     return
+                elif text_upper.startswith("FIXHISTORY") or text_upper.startswith("/FIXHISTORY"):
+                    await self.fix_historical_entries(text_upper)
+                    return
 
                 logger.info(f"Received DM from Admin. Processing Signal.")
                 await self.process_message(event, is_mock_override=False)
