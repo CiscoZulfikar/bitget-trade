@@ -679,7 +679,7 @@ class TelegramListener:
             
         while True:
             try:
-                await asyncio.sleep(60) # Poll every 60s
+                logger.info("💓 Trade Monitor Pulse... Checking positions.")
                 
                 current_pos_list = await self.exchange.get_all_positions()
                 current_positions = {p['symbol']: p for p in current_pos_list}
