@@ -710,7 +710,6 @@ class ExchangeHandler:
                     "productType": "USDT-FUTURES",
                     "marginCoin": "USDT",
                     "stopSurplusTriggerPrice": str(new_tp),
-                    "stopSurplusTriggerType": "market_price", 
                     "holdSide": "long" if side == "long" else "short"
                 }
                 
@@ -753,7 +752,6 @@ class ExchangeHandler:
                     "productType": "USDT-FUTURES",
                     "marginCoin": "USDT",
                     "stopLossTriggerPrice": str(new_sl),
-                    "stopLossTriggerType": "market_price",
                     "holdSide": "long" if side == "long" else "short"
                 }
                 
