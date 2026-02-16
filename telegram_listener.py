@@ -118,6 +118,7 @@ class TelegramListener:
 
         # Parse
         data = await parse_message(text, reply_context)
+        data['raw_message'] = text # Inject raw text for advanced processing
         
         if data['type'] == 'TRADE_CALL':
             # Check DB to allow edits ONLY if we haven't processed this msg_id yet
@@ -224,7 +225,15 @@ class TelegramListener:
                  return
 
         position_size_usdt = self.risk_manager.calculate_position_size(balance)
-        leverage = self.risk_manager.calculate_leverage(exec_price, sl_price)
+        
+        # Variable Risk Sizing
+        risk_scalar = 1.0
+        raw_msg = data.get('raw_message', '').upper()
+        if "0.5R" in raw_msg or "HALF RISK" in raw_msg or "0.5 R" in raw_msg:
+             risk_scalar = 0.5
+             logger.info(f"📉 Half Risk detected (0.5R). Scaling leverage/risk by 50%.")
+
+        leverage = self.risk_manager.calculate_leverage(exec_price, sl_price, risk_scalar=risk_scalar)
         
         # Place Order
         if is_mock:
@@ -283,7 +292,9 @@ class TelegramListener:
                 
                 # UPDATE the reserved trade (PROCESSING -> OPEN)
                 await update_trade_full(msg_id, order['id'], symbol, fill_price, sl_price, tp_price=tp_price, status="OPEN", position_side=direction)
-                await self.notifier.send(f"🟢 {final_order_type} Order Opened: {symbol} at {fill_price} with {leverage}x.\n**TP:** {tp_display}\n**SL:** {sl_price}\n**Margin:** ${position_size_usdt:.2f}\nReason: {reason}")
+                
+                risk_note = f"\n**Risk:** {risk_scalar}R" if risk_scalar != 1.0 else ""
+                await self.notifier.send(f"🟢 {final_order_type} Order Opened: {symbol} at {fill_price} with {leverage}x.\n**TP:** {tp_display}\n**SL:** {sl_price}\n**Margin:** ${position_size_usdt:.2f}{risk_note}\nReason: {reason}")
             else:
                 # Should not happen if place_order raises on error, but handled for safety
                 await self.notifier.send(f"⚠️ Execution failed for {symbol} (Unknown reason/None returned).")

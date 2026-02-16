@@ -26,10 +26,11 @@ class RiskManager:
             
         return current_balance * rate
 
-    def calculate_leverage(self, entry_price, sl_price):
+    def calculate_leverage(self, entry_price, sl_price, risk_scalar=1.0):
         """
         Calculates leverage such that if SL is hit, loss is ~50% of MARGIN.
         Includes a 10% Safety Buffer on the SL distance to account for slippage.
+        risk_scalar: 1.0 for full risk, 0.5 for half risk, etc.
         """
         if entry_price == 0: return 1
         
@@ -43,8 +44,9 @@ class RiskManager:
         if safe_risk_pct == 0: return 1
 
         # 3. Calculate Leverage: Target Loss % / Safe Risk %
-        # leverage * safe_risk_pct = leverage_loss_cap
-        leverage = self.leverage_loss_cap / safe_risk_pct
+        # leverage * safe_risk_pct = leverage_loss_cap * risk_scalar
+        target_loss_cap = self.leverage_loss_cap * risk_scalar
+        leverage = target_loss_cap / safe_risk_pct
         
         # 4. Round and Cap
         leverage = math.floor(leverage)
