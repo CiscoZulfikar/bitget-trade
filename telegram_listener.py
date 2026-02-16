@@ -399,7 +399,9 @@ class TelegramListener:
                  market_price = await self.exchange.get_market_price(symbol)
                  new_sl = self.risk_manager.scale_price(new_sl, market_price)
             
-            result = await self.exchange.update_sl(symbol, order_id, new_sl, risk_manager=self.risk_manager)
+            # Scale it (if it was a raw number, e.g. "SL 69000", verify it fits order of magnitude)
+            # update_sl(symbol, new_sl) -> standard signature
+            result = await self.exchange.update_sl(symbol, new_sl)
             
             # Handle return (bool, msg)
             if isinstance(result, tuple):
