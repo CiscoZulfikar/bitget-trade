@@ -936,6 +936,77 @@ class TelegramListener:
         else:
             await self.notifier.send("⚠️ **Caution:** This will wipe all trade history.\nTo proceed, type: `/cleardb confirm`")
 
+    async def fix_historical_entries(self, command_text):
+        """
+        Manually syncs entry prices for CLOSED trades by checking Order History.
+        Usage: /fixhistory [limit] (default 20)
+        """
+        try:
+            parts = command_text.split()
+            limit = int(parts[1]) if len(parts) > 1 else 20
+            
+            await self.notifier.send(f"⏳ **Starting History Fix** (Limit: {limit})...\nThis may take a moment.")
+            
+            trades = await get_recent_trades(limit)
+            updated_count = 0
+            
+            for t in trades:
+                if t['status'] != 'CLOSED': continue
+                
+                symbol = t['symbol']
+                # Normalize for bitget if needed, but fetch_orders usually takes the slash format or unified
+                # We'll try the stored symbol first
+                
+                try:
+                    # Fetch orders around the trade timestamp
+                    # optimization: fetch last N orders
+                    history = await self.exchange.exchange.fetch_orders(symbol, limit=20)
+                    
+                    # Find the OPEN order (buy/sell that matches entry criteria)
+                    # We look for the order that was filled closest to 'timestamp'
+                    # timestamp string: "2026-02-16 07:19:43" (WIB) -> Need to be careful with Timezones
+                    
+                    # Simplification: Look for the FIRST filled order that is BEFORE the closed_timestamp (if exists) 
+                    # OR just look for the order with the price that is NOT the same as current DB entry
+                    
+                    # Let's find the order with status='closed' and side matching logical entry side
+                    # Long: Buy, Short: Sell
+                    
+                    # Filter history for this symbol's entry order
+                    # It's hard to map exactly 1-to-1 without order_id if order_id was missed.
+                    # But we have order_id in DB!
+                    
+                    matched_order = None
+                    if t['order_id']:
+                        # If we have order ID, search for it specifically
+                        try:
+                            matched_order = await self.exchange.exchange.fetch_order(t['order_id'], symbol)
+                        except:
+                            pass
+                    
+                    if not matched_order:
+                        # Fallback: Find most recent filled order before this trade's close time?
+                        # Taking a risk here: Just find the latest 'closed' order that looks like an entry
+                        # For now, let's rely on Order ID if present, otherwise skip to be safe
+                        continue
+
+                    if matched_order:
+                        real_entry = float(matched_order.get('average') or matched_order.get('price') or 0)
+                        db_entry = float(t['entry_price'])
+                        
+                        if real_entry > 0 and abs(real_entry - db_entry) / db_entry > 0.001:
+                            await update_trade_entry(t['message_id'], real_entry)
+                            updated_count += 1
+                            logger.info(f"Fixed History {symbol}: {db_entry} -> {real_entry}")
+
+                except Exception as inner_e:
+                    logger.warning(f"Failed to fix {symbol}: {inner_e}")
+                    
+            await self.notifier.send(f"✅ **History Fix Complete.**\nUpdated {updated_count} trades.")
+            
+        except Exception as e:
+             await self.notifier.send(f"⚠️ History Fix Failed: {e}")
+
     async def send_help(self):
         msg = (
             "🤖 **Trading Bot Commands**\n\n"
@@ -944,6 +1015,7 @@ class TelegramListener:
             "**/database** - Last 20 trade entries\n"
             "**/performance** - Win Rate & R Dashboard\n"
             "**/performance [Month] [Year]** - Specific month stats\n"
+            "**/fixhistory** - Sync historical entry prices\n"
             "**/cleardb** - Wipe all trade history\n"
             "**/market** - BTC Price Check\n"
             "**/help** - Show this menu\n"
