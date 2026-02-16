@@ -731,13 +731,25 @@ class TelegramListener:
                             if target_trade and symbol in current_positions:
                                 try:
                                     pos = current_positions[symbol]
+                                    # Log available keys to ensure we are looking at right data (once per loop/symbol could be spammy, but needed now)
+                                    # logger.info(f"DEBUG POS DATA {symbol}: {pos}") 
+                                    
                                     real_entry = float(pos.get('entryPrice', 0.0))
+                                    if real_entry == 0.0 and 'openPriceAvg' in pos: # Bitget V2 alternative
+                                         real_entry = float(pos['openPriceAvg'])
+
                                     db_entry = float(target_trade['entry_price'])
                                     
+                                    diff_pct = 0
+                                    if db_entry > 0:
+                                        diff_pct = abs(real_entry - db_entry) / db_entry
+                                    
+                                    # logger.info(f"DEBUG CHECK {symbol}: Real={real_entry} DB={db_entry} Diff={diff_pct:.4f}")
+
                                     # If difference is > 0.1%, sync it (avoid minor float diffs)
-                                    if real_entry > 0 and abs(real_entry - db_entry) / db_entry > 0.001:
+                                    if real_entry > 0 and diff_pct > 0.001:
                                         await update_trade_entry(target_trade['message_id'], real_entry)
-                                        logger.info(f"🔄 Synced Entry Price for {symbol}: {db_entry} -> {real_entry}")
+                                        logger.info(f"🔄 Synced Entry Price for {symbol}: {db_entry} -> {real_entry} (Diff: {diff_pct:.2%})")
                                 except Exception as sync_e:
                                     logger.error(f"Entry Sync Error for {symbol}: {sync_e}")
                             # ------------------------
