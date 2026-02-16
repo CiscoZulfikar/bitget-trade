@@ -709,7 +709,8 @@ class ExchangeHandler:
                     "symbol": raw_symbol,
                     "productType": "USDT-FUTURES",
                     "marginCoin": "USDT",
-                    "tpPrice": str(new_tp), # Specific param for this endpoint
+                    "stopSurplusTriggerPrice": str(new_tp),
+                    "stopSurplusTriggerType": "market_price", 
                     "holdSide": "long" if side == "long" else "short"
                 }
                 
@@ -751,7 +752,8 @@ class ExchangeHandler:
                     "symbol": raw_symbol,
                     "productType": "USDT-FUTURES",
                     "marginCoin": "USDT",
-                    "slPrice": str(new_sl),
+                    "stopLossTriggerPrice": str(new_sl),
+                    "stopLossTriggerType": "market_price",
                     "holdSide": "long" if side == "long" else "short"
                 }
                 
