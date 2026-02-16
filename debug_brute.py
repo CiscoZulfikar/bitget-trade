@@ -36,7 +36,8 @@ async def main():
                             "symbol": s,
                             "productType": p_type,
                             "planType": plan,
-                            "holdSide": side # ADDED THIS
+                            "holdSide": side,
+                            "marginCoin": "USDT" # ADDED THIS
                         }
                         resp = await exchange.privateMixGetV2MixOrderOrdersPlanPending(params)
                         
