@@ -724,8 +724,8 @@ class TelegramListener:
                                 price = net_pnl_data['exit_price']
                                 logger.info(f"Updated with Net PnL: {pnl} (Exit: {price})")
 
-                            icon = "🟢" if pnl >= 0 else "🔴"
-                            reason = "Take Profit 🎯" if pnl >= 0 else "Stop Loss 🛑"
+                            icon = "🟢" if pnl > 0 else "🔴"
+                            reason = "Take Profit 🎯" if pnl > 0 else "Stop Loss 🛑"
                             
                             await self.notifier.send(
                                 f"🔔 **Position Closed: {symbol}**\n"
@@ -819,7 +819,10 @@ class TelegramListener:
                 # Header Construction
                 header = f"🟢 [OPEN] **{t['symbol']}**"
                 if t['status'] == "CLOSED":
-                     header = f"🔴 [CLOSED] **{t['symbol']}**"
+                     # Dynamic Icon based on Pnl
+                     pnl = t.get('pnl', 0)
+                     icon = "🟢" if pnl > 0 else "🔴"
+                     header = f"{icon} [CLOSED] **{t['symbol']}**"
 
                 # Basic Info
                 row_msg = (
