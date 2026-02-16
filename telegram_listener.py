@@ -5,7 +5,7 @@ from config import TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_CHANNEL_ID, NOTI
 from parser import parse_message
 from risk_manager import RiskManager
 from exchange_handler import ExchangeHandler
-from database import store_trade, get_trade_by_msg_id, update_trade_order_id, update_trade_sl, close_trade_db, get_open_trade_count, get_all_open_trades, get_recent_trades, reserve_trade, update_trade_full, get_stats_report, get_monthly_stats, clear_all_trades
+from database import store_trade, get_trade_by_msg_id, update_trade_order_id, update_trade_sl, close_trade_db, get_open_trade_count, get_all_open_trades, get_recent_trades, reserve_trade, update_trade_full, get_stats_report, get_monthly_stats, clear_all_trades, update_trade_entry
 from notifier import Notifier
 
 logger = logging.getLogger(__name__)
