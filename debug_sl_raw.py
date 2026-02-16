@@ -26,14 +26,15 @@ async def main():
     holdSide = "short" 
     new_sl = "2000"
 
-    # ATTEMPT 1: PlacePosTpsl (Current Best Guess)
-    print("\n--- ATTEMPT 1: PlacePosTpsl with plain params ---")
+    # ATTEMPT 1: PlacePosTpsl WITH valid Type
+    print("\n--- ATTEMPT 1: PlacePosTpsl with explicit TriggerType ---")
     try:
         params = {
             "symbol": symbol,
             "productType": productType,
             "marginCoin": marginCoin,
             "stopLossTriggerPrice": str(new_sl),
+            "stopLossTriggerType": "market_price", # Maybe it needs this?
             "holdSide": holdSide
         }
         await exchange.privateMixPostV2MixOrderPlacePosTpsl(params)
@@ -43,16 +44,16 @@ async def main():
     except Exception as e:
         print(f"❌ ATTEMPT 1 FAILED: {e}")
 
-    # ATTEMPT 2: PlaceTpslOrder (Alternative Endpoint)
-    print("\n--- ATTEMPT 2: PlaceTpslOrder ---")
+    # ATTEMPT 2: PlaceTpslOrder with 'triggerPrice'
+    print("\n--- ATTEMPT 2: PlaceTpslOrder (using triggerPrice) ---")
     try:
         if hasattr(exchange, 'privateMixPostV2MixOrderPlaceTpslOrder'):
             params = {
                 "symbol": symbol,
                 "productType": productType,
                 "marginCoin": marginCoin,
-                "stopLossTriggerPrice": str(new_sl),
-                "stopLossTriggerType": "market_price", # Try sending it here
+                "triggerPrice": str(new_sl), # Using generic key
+                "triggerType": "market_price",
                 "holdSide": holdSide,
                 "planType": "loss_plan"
             }
@@ -65,17 +66,20 @@ async def main():
     except Exception as e:
         print(f"❌ ATTEMPT 2 FAILED: {e}")
 
-    # ATTEMPT 3: V1 PlaceTPSL (Legacy Fallback)
-    print("\n--- ATTEMPT 3: V1 PlaceTPSL ---")
+    # ATTEMPT 3: PlacePlanOrder (Original Method) with 'triggerPrice'
+    print("\n--- ATTEMPT 3: PlacePlanOrder (Re-test) ---")
     try:
-         if hasattr(exchange, 'privateMixPostMixV1PlanPlaceTPSL'):
+         if hasattr(exchange, 'privateMixPostV2MixOrderPlacePlanOrder'):
             params = {
                 "symbol": symbol,
+                "productType": productType,
                 "marginCoin": marginCoin,
-                "slPrice": str(new_sl),
-                "holdSide": holdSide
+                "triggerPrice": str(new_sl),
+                "triggerType": "market_price",
+                "holdSide": holdSide,
+                "planType": "loss_plan"
             }
-            await exchange.privateMixPostMixV1PlanPlaceTPSL(params)
+            await exchange.privateMixPostV2MixOrderPlacePlanOrder(params)
             print("✅ ATTEMPT 3 SUCCESS")
             await exchange.close()
             return
