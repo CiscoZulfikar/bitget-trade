@@ -727,33 +727,6 @@ class TelegramListener:
                             # We might have multiple if bugged, but usually one OPEN per symbol
                             target_trade = next((t for t in open_trades if t['symbol'] == normalized_symbol or t['symbol'] == symbol), None)
                             
-                            # --- SYNC ENTRY PRICE ---
-                            if target_trade and symbol in current_positions:
-                                try:
-                                    pos = current_positions[symbol]
-                                    # Log available keys to ensure we are looking at right data (once per loop/symbol could be spammy, but needed now)
-                                    # logger.info(f"DEBUG POS DATA {symbol}: {pos}") 
-                                    
-                                    real_entry = float(pos.get('entryPrice', 0.0))
-                                    if real_entry == 0.0 and 'openPriceAvg' in pos: # Bitget V2 alternative
-                                         real_entry = float(pos['openPriceAvg'])
-
-                                    db_entry = float(target_trade['entry_price'])
-                                    
-                                    diff_pct = 0
-                                    if db_entry > 0:
-                                        diff_pct = abs(real_entry - db_entry) / db_entry
-                                    
-                                    # logger.info(f"DEBUG CHECK {symbol}: Real={real_entry} DB={db_entry} Diff={diff_pct:.4f}")
-
-                                    # If difference is > 0.1%, sync it (avoid minor float diffs)
-                                    if real_entry > 0 and diff_pct > 0.001:
-                                        await update_trade_entry(target_trade['message_id'], real_entry)
-                                        logger.info(f"🔄 Synced Entry Price for {symbol}: {db_entry} -> {real_entry} (Diff: {diff_pct:.2%})")
-                                except Exception as sync_e:
-                                    logger.error(f"Entry Sync Error for {symbol}: {sync_e}")
-                            # ------------------------
-                            
                             if target_trade:
                                 await close_trade_db(target_trade['message_id'], exit_price=price, pnl=pnl)
                                 logger.info(f"DB Update: Marked {symbol} (Msg {target_trade['message_id']}) as CLOSED.")
@@ -765,8 +738,43 @@ class TelegramListener:
                 # Update Cache
                 last_positions = current_positions
                 
+                # --- SYNC OPEN TRADES ENTRY PRICE ---
+                try:
+                    open_trades_sync = await get_all_open_trades()
+                    for t in open_trades_sync:
+                        # Find matching position
+                        # DB Symbol is normalized (BTCUSDT), Pos Symbol might be (BTC/USDT:USDT)
+                        # We need to find if 't' corresponds to any key in current_positions
+                        
+                        match_pos = None
+                        for pos_sym, pos_data in current_positions.items():
+                             norm_pos = pos_sym.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
+                             if norm_pos == t['symbol']:
+                                 match_pos = pos_data
+                                 break
+                        
+                        if match_pos:
+                            real_entry = float(match_pos.get('entryPrice', 0.0))
+                            if real_entry == 0.0 and 'openPriceAvg' in match_pos:
+                                    real_entry = float(match_pos['openPriceAvg'])
+                            
+                            db_entry = float(t['entry_price'])
+                            
+                            diff_pct = 0
+                            if db_entry > 0:
+                                diff_pct = abs(real_entry - db_entry) / db_entry
+                                
+                            if real_entry > 0 and diff_pct > 0.001: # 0.1% diff
+                                await update_trade_entry(t['message_id'], real_entry)
+                                logger.info(f"🔄 Synced Entry Price for {t['symbol']}: {db_entry} -> {real_entry} (Diff: {diff_pct:.2%})")
+                except Exception as sync_loop_e:
+                    logger.error(f"Sync Loop Error: {sync_loop_e}")
+                # ------------------------------------
+                
             except Exception as e:
                 logger.error(f"Trade monitor error: {e}")
+            
+            await asyncio.sleep(60) # Poll every 60s
 
     async def send_database_records(self):
         """Sends the last 20 trades from the database."""
