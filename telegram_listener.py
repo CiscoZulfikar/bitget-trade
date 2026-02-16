@@ -282,7 +282,7 @@ class TelegramListener:
                      fill_price = float(order['price'])
                 
                 # UPDATE the reserved trade (PROCESSING -> OPEN)
-                await update_trade_full(msg_id, order['id'], symbol, fill_price, sl_price, tp_price=tp_price, status="OPEN")
+                await update_trade_full(msg_id, order['id'], symbol, fill_price, sl_price, tp_price=tp_price, status="OPEN", position_side=direction)
                 await self.notifier.send(f"🟢 {final_order_type} Order Opened: {symbol} at {fill_price} with {leverage}x.\n**TP:** {tp_display}\n**SL:** {sl_price}\n**Margin:** ${position_size_usdt:.2f}\nReason: {reason}")
             else:
                 # Should not happen if place_order raises on error, but handled for safety
@@ -410,7 +410,7 @@ class TelegramListener:
                 success, msg = result, "Unknown Error"
 
             if success:
-                await update_trade_sl(trade['message_id'], new_sl)
+                # await update_trade_sl(trade['message_id'], new_sl) # KEEP INITIAL SL FOR R CALC
                 await self.notifier.send(f"🟡 Signal Edited: Updated SL for {symbol} to {new_sl}.")
             else:
                  await self.notifier.send(f"⚠️ Failed to update SL for {symbol}. Reason: {msg}")

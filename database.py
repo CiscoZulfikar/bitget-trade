@@ -38,6 +38,10 @@ async def init_db():
             await db.execute('ALTER TABLE trades ADD COLUMN closed_timestamp DATETIME')
         except:
             pass
+        try:
+            await db.execute('ALTER TABLE trades ADD COLUMN position_side TEXT')
+        except:
+            pass
         await db.commit()
     logger.info("Database initialized.")
 
@@ -81,14 +85,14 @@ async def reserve_trade(message_id, symbol):
         logger.warning(f"Failed to reserve trade {message_id}: {e}")
         return False
 
-async def update_trade_full(message_id, order_id, symbol, entry_price, sl_price, tp_price=None, status="OPEN"):
+async def update_trade_full(message_id, order_id, symbol, entry_price, sl_price, tp_price=None, status="OPEN", position_side="LONG"):
     """Update a reserved trade with full details."""
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute('''
             UPDATE trades 
-            SET order_id = ?, symbol = ?, entry_price = ?, sl_price = ?, tp_price = ?, status = ?
+            SET order_id = ?, symbol = ?, entry_price = ?, sl_price = ?, tp_price = ?, status = ?, position_side = ?
             WHERE message_id = ?
-        ''', (order_id, symbol, entry_price, sl_price, tp_price, status, message_id))
+        ''', (order_id, symbol, entry_price, sl_price, tp_price, status, position_side, message_id))
         await db.commit()
 
 async def get_trade_by_msg_id(message_id):
@@ -104,7 +108,8 @@ async def get_trade_by_msg_id(message_id):
                     "entry_price": row[3],
                     "sl_price": row[4],
                     "tp_price": row[5],
-                    "status": row[6]
+                    "status": row[6],
+                    "position_side": row[11] if len(row) > 11 else ("LONG" if row[4] < row[3] else "SHORT") # Fallback
                 }
             return None
 
@@ -161,7 +166,8 @@ async def get_all_open_trades():
                     "sl_price": row["sl_price"],
                     "tp_price": row["tp_price"],
                     "status": row["status"],
-                    "timestamp": row["timestamp"]
+                    "timestamp": row["timestamp"],
+                    "position_side": row["position_side"] if "position_side" in row.keys() else ("LONG" if row["sl_price"] < row["entry_price"] else "SHORT")
                 })
             return trades
 
@@ -184,7 +190,8 @@ async def get_recent_trades(limit=20):
                     "timestamp": row["timestamp"],
                     "exit_price": row["exit_price"],
                     "pnl": row["pnl"],
-                    "closed_timestamp": row.keys().__contains__("closed_timestamp") and row["closed_timestamp"] or None
+                    "closed_timestamp": row.keys().__contains__("closed_timestamp") and row["closed_timestamp"] or None,
+                    "position_side": row["position_side"] if "position_side" in row.keys() else ("LONG" if row["sl_price"] < row["entry_price"] else "SHORT")
                 })
             return trades
 
@@ -259,7 +266,11 @@ async def get_stats_report():
                 
                 if entry == 0 or sl == 0: continue
 
-                direction = "LONG" if sl < entry else "SHORT"
+                if "position_side" in row.keys() and row["position_side"]:
+                    direction = row["position_side"]
+                else:
+                    direction = "LONG" if sl < entry else "SHORT"
+                
                 risk = abs(entry - sl)
                 if risk == 0: continue
                 
@@ -337,7 +348,12 @@ async def get_monthly_stats(month, year):
                     pnl = float(row['pnl'] or 0)
                     
                     if entry == 0 or sl == 0: continue
-                    direction = "LONG" if sl < entry else "SHORT"
+
+                    if "position_side" in row.keys() and row["position_side"]:
+                        direction = row["position_side"]
+                    else:
+                        direction = "LONG" if sl < entry else "SHORT"
+
                     risk = abs(entry - sl)
                     if risk == 0: continue
                     r_value = (exit_px - entry) / risk if direction == "LONG" else (entry - exit_px) / risk
