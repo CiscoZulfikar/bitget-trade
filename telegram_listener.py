@@ -32,7 +32,6 @@ class TelegramListener:
         # 2. DM Listener (Bot API) - For Mock Signals
         @self.bot_client.on(events.NewMessage(incoming=True, func=lambda e: e.is_private))
         async def handler_dm(event):
-            # Only process DMs from the Admin
             if event.sender_id == NOTIFICATION_USER_ID:
                 text_upper = event.message.message.upper().strip()
 

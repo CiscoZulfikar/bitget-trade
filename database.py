@@ -55,14 +55,11 @@ async def init_db():
 
 async def store_trade(message_id, order_id, symbol, entry_price, sl_price, tp_price=None, status="OPEN"):
     """Store a new trade with WIB timestamp."""
-    # Current Time (UTC) -> WIB (UTC+7)
     from datetime import datetime, timezone, timedelta
     
-    # Correct way to get WIB time
     tz_wib = timezone(timedelta(hours=7))
     now_wib = datetime.now(timezone.utc).astimezone(tz_wib)
     
-    # Store as string "YYYY-MM-DD HH:MM:SS" (Naive-like but correct Time)
     ts_str = now_wib.strftime('%Y-%m-%d %H:%M:%S')
     
     async with aiosqlite.connect(DB_NAME) as db:
@@ -236,7 +233,6 @@ async def get_stats_report():
     prev_year_start = curr_year_start.replace(year=curr_year_start.year - 1)
     prev_year_end = curr_year_start - timedelta(seconds=1)
 
-    # Labels
     def get_q_label(date):
         q = (date.month - 1) // 3 + 1
         return f"Q{q} {date.year}"

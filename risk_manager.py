@@ -34,21 +34,15 @@ class RiskManager:
         """
         if entry_price == 0: return 1
         
-        # 1. Calculate Raw Risk % (Distance to SL)
         risk_pct = abs(entry_price - sl_price) / entry_price
         
-        # 2. Apply Slippage Buffer (Assume SL is 10% actual worse than chart)
-        # This effectively lowers leverage to ensure safety during bad execution.
         safe_risk_pct = risk_pct * 1.10 
         
         if safe_risk_pct == 0: return 1
 
-        # 3. Calculate Leverage: Target Loss % / Safe Risk %
-        # leverage * safe_risk_pct = leverage_loss_cap * risk_scalar
         target_loss_cap = self.leverage_loss_cap * risk_scalar
         leverage = target_loss_cap / safe_risk_pct
         
-        # 4. Round and Cap
         leverage = math.floor(leverage)
         return max(1, min(int(leverage), self.max_leverage))
 
@@ -67,7 +61,6 @@ class RiskManager:
         if signal_entry == 0:
             return 'ABORT', 0, "Signal Entry is 0"
 
-        # Explicit Override
         if explicit_order_type == 'LIMIT':
             return 'LIMIT', signal_entry, "Explicit Limit Order requested"
 
@@ -90,8 +83,6 @@ class RiskManager:
         if signal_price == 0 or market_price == 0:
             return signal_price
 
-        # Calculate magnitude difference (log10)
-        # Use abs to handle potential negative logs safely (though price > 0)
         signal_oom = math.floor(math.log10(signal_price))
         market_oom = math.floor(math.log10(market_price))
         

@@ -15,27 +15,22 @@ class ExchangeHandler:
             'options': {
                 'defaultType': 'swap',  # Futures
             },
-            'timeout': 30000, # Increased timeout for heavy market loads
+            'timeout': 30000,
             'enableRateLimit': True,
-            'sandboxMode': False, # Explicitly disable sandbox to prevent SUSDT-FUTURES
+            'sandboxMode': False,
         })
         
-        # Optimization: Disable fetchCurrencies to avoid hitting Spot API (which times out)
-        # We only need Futures markets, and fetch_currencies often hits v2/spot/public/coins
         self.exchange.has['fetchCurrencies'] = False
 
     async def get_market_price(self, symbol):
         try:
-            # Try CCXT first
             ticker = await self.exchange.fetch_ticker(symbol)
             return ticker['last']
         except Exception as ccxt_error:
-            # Fallback to Raw API (Bypass load_markets)
             try:
-                # Bitget V2 Mix Ticker Endpoint
                 url = "https://api.bitget.com/api/v2/mix/market/ticker"
                 params = {
-                    "symbol": symbol, # e.g. WIFUSDT
+                    "symbol": symbol,
                     "productType": "USDT-FUTURES"
                 }
                 async with aiohttp.ClientSession() as session:
@@ -51,19 +46,8 @@ class ExchangeHandler:
 
     async def get_balance(self):
         """Fetches Balance Breakdown (Free vs Equity)."""
-        # CCXT 'fetch_balance' usually returns 'total' (equity) and 'free' (available)
-        # Force 'swap' to avoid SUSDT error
         balance = await self.exchange.fetch_balance(params={'type': 'swap'})
         
-        # Bitget Specifics:
-        # 'free': Available for trade (Cross margin balance - frozen)
-        # 'total': Equity (Balance + PnL)
-        # Note: CCXT mapping might vary, but widely:
-        # balance['USDT']['free'] = Available
-        # balance['USDT']['total'] = Equity (approx) or Wallet Balance
-        
-        # For Bitget Futures, we want "usdtEquity" which is often mapped to 'total'
-        # Let's return a detailed dict
         return {
             'free': balance.get('USDT', {}).get('free', 0.0),
             'equity': balance.get('USDT', {}).get('total', 0.0)
@@ -72,27 +56,19 @@ class ExchangeHandler:
     async def get_position(self, symbol):
         """Fetches the current open position for the symbol."""
         try:
-            # Fetch ALL positions to avoid CCXT symbol filtering issues (e.g. BTCUSDT vs BTC/USDT:USDT)
             positions = await self.exchange.fetch_positions(params={'productType': 'USDT-FUTURES'})
-            # Filter for active positions (size > 0)
             
-            # Simple match first
             target_pos = next((p for p in positions if p['symbol'] == symbol and float(p['contracts']) > 0), None)
             
-            # If not found, try robust matching (CCXT symbol vs Input symbol)
-            # Input: WIFUSDT -> CCXT: WIF/USDT:USDT
             if not target_pos:
                  for p in positions:
                      if float(p['contracts']) > 0:
-                         # Check if standardizing the CCXT symbol matches the input
-                         # WIF/USDT:USDT -> WIFUSDT
                          p_sym_clean = p['symbol'].replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
                          input_clean = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
                          
                          if p_sym_clean == input_clean:
                              target_pos = p
                              break
-
             return target_pos
         except Exception as e:
             logger.error(f"Error fetching position for {symbol}: {e}")
@@ -157,37 +133,23 @@ class ExchangeHandler:
 
     async def ensure_hedge_mode(self, symbol):
         try:
-            # Force Hedge Mode
-            # hedged=True means Hedge Mode
             await self.exchange.set_position_mode(True, symbol)
         except Exception as e:
             err_str = str(e)
-            # 40789: Already in that mode
             if "40789" in err_str:
                 return
             
-            # 400172: Has open positions/orders (Cannot switch)
-            # 43116: Generic 'condition not met' often for this too
             logger.warning(f"Set Hedge Mode Failed: {e}")
-            
-            # We RAISE this so the bot tells the user via Telegram
-            # This explains WHY the subsequent trade would fail
             raise Exception(f"Failed to set Hedge Mode. Close all active positions/orders for {symbol} on Bitget manually and try again. ({e})")
 
     async def ensure_isolated_margin(self, symbol):
         try:
-            # Force Isolated Margin
-            # Usually set_margin_mode('isolated', symbol)
-            # Check for existing mode first? CCXT might handle.
             await self.exchange.set_margin_mode('isolated', symbol)
         except Exception as e:
              err_str = str(e)
-             # 40789: Already in that mode (Bitget might return this if already isolated)
              if "40789" in err_str:
                  return
              logger.warning(f"Set Isolated Margin Failed: {e}")
-             # raising here might be strict, but user asked for it. 
-             # If it fails (e.g. open positions), we should probably fail the trade to avoid Cross margin mishaps.
              raise Exception(f"Failed to set Isolated Margin. Close positions for {symbol} and try again. ({e})")
 
     async def get_active_tp_sl(self, symbol):
@@ -196,7 +158,6 @@ class ExchangeHandler:
             sl_prices = []
             tp_prices = []
             
-            # 1. Fetch Standard Open Orders (Limit Orders)
             try:
                 orders = await self.exchange.fetch_open_orders(symbol)
                 for o in orders:
@@ -216,11 +177,8 @@ class ExchangeHandler:
             except Exception as e:
                 logger.warning(f"Error fetching open orders for {symbol}: {e}")
 
-            # 2. Fetch Plan Orders (Partial SL/TPs)
             try:
-                # Use CCXT implicit method for Bitget V2 Plan Pending
                 if hasattr(self.exchange, 'privateMixGetV2MixOrderOrdersPlanPending'):
-                    # Sanitize Symbol for Bitget V2 (IP/USDT:USDT -> IPUSDT)
                     raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
                     
                     params = {
