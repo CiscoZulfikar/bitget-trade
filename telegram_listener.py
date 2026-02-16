@@ -291,7 +291,8 @@ class TelegramListener:
                      fill_price = float(order['price'])
                 
                 # UPDATE the reserved trade (PROCESSING -> OPEN)
-                await update_trade_full(msg_id, order['id'], symbol, fill_price, sl_price, tp_price=tp_price, status="OPEN", position_side=direction)
+                db_notes = f"Risk: {risk_scalar}R" if risk_scalar != 1.0 else None
+                await update_trade_full(msg_id, order['id'], symbol, fill_price, sl_price, tp_price=tp_price, status="OPEN", position_side=direction, leverage=leverage, notes=db_notes)
                 
                 risk_note = f"\n**Risk:** {risk_scalar}R" if risk_scalar != 1.0 else ""
                 await self.notifier.send(f"🟢 {final_order_type} Order Opened: {symbol} at {fill_price} with {leverage}x.\n**TP:** {tp_display}\n**SL:** {sl_price}\n**Margin:** ${position_size_usdt:.2f}{risk_note}\nReason: {reason}")

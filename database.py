@@ -42,6 +42,14 @@ async def init_db():
             await db.execute('ALTER TABLE trades ADD COLUMN position_side TEXT')
         except:
             pass
+        try:
+            await db.execute('ALTER TABLE trades ADD COLUMN leverage INTEGER')
+        except:
+            pass
+        try:
+            await db.execute('ALTER TABLE trades ADD COLUMN notes TEXT')
+        except:
+            pass
         await db.commit()
     logger.info("Database initialized.")
 
@@ -85,14 +93,14 @@ async def reserve_trade(message_id, symbol):
         logger.warning(f"Failed to reserve trade {message_id}: {e}")
         return False
 
-async def update_trade_full(message_id, order_id, symbol, entry_price, sl_price, tp_price=None, status="OPEN", position_side="LONG"):
+async def update_trade_full(message_id, order_id, symbol, entry_price, sl_price, tp_price=None, status="OPEN", position_side="LONG", leverage=None, notes=None):
     """Update a reserved trade with full details."""
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute('''
             UPDATE trades 
-            SET order_id = ?, symbol = ?, entry_price = ?, sl_price = ?, tp_price = ?, status = ?, position_side = ?
+            SET order_id = ?, symbol = ?, entry_price = ?, sl_price = ?, tp_price = ?, status = ?, position_side = ?, leverage = ?, notes = ?
             WHERE message_id = ?
-        ''', (order_id, symbol, entry_price, sl_price, tp_price, status, position_side, message_id))
+        ''', (order_id, symbol, entry_price, sl_price, tp_price, status, position_side, leverage, notes, message_id))
         await db.commit()
 
 async def get_trade_by_msg_id(message_id):
