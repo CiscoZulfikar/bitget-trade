@@ -270,8 +270,51 @@ class ExchangeHandler:
                 trades.sort(key=lambda x: x['timestamp'], reverse=True)
                 return trades[0]
             return None
+            return None
         except Exception as e:
             logger.error(f"Error fetching last trade for {symbol}: {e}")
+            return None
+
+    async def get_last_closed_pnl(self, symbol):
+        """Fetches the entries from Position History to get accurate Net PnL (inc. fees)."""
+        try:
+            # Try fetching position history (Bitget V2 Feature)
+            # Returns list of closed positions
+            history = await self.exchange.fetch_positions_history([symbol], params={'productType': 'USDT-FUTURES', 'limit': 5})
+            
+            if history:
+                # Sort by 'utime' or 'lastUpdateTimestamp' descending
+                # Debug output showed 'lastUpdateTimestamp' available in mapped data, or 'utime' in info
+                history.sort(key=lambda x: int(x['info'].get('utime', 0)), reverse=True)
+                
+                latest = history[0]
+                info = latest.get('info', {})
+                
+                # key 'netProfit' contains (PnL - Fees)
+                # key 'pnl' contains Gross PnL
+                
+                net_pnl = 0.0
+                if 'netProfit' in info:
+                    net_pnl = float(info['netProfit'])
+                elif 'pnl' in info:
+                    # Fallback if netProfit missing (unlikely on v2)
+                    pnl = float(info['pnl'])
+                    fee_open = float(info.get('openFee', 0))
+                    fee_close = float(info.get('closeFee', 0))
+                    funding = float(info.get('totalFunding', 0))
+                    net_pnl = pnl + fee_open + fee_close + funding
+                
+                exit_price = float(info.get('closeAvgPrice', 0))
+                
+                return {
+                    'pnl': net_pnl,
+                    'exit_price': exit_price,
+                    'raw': latest
+                }
+                
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching closed PnL for {symbol}: {e}")
             return None
 
     async def get_tickers(self, symbols):

@@ -440,6 +440,13 @@ class TelegramListener:
                     elif 'realizedPnl' in last_trade:
                          realized_pnl = float(last_trade['realizedPnl'] or 0.0)
 
+                # Fetch Accurate Net PnL (including fees) via Position History
+                net_pnl_data = await self.exchange.get_last_closed_pnl(symbol)
+                if net_pnl_data:
+                    realized_pnl = net_pnl_data['pnl']
+                    final_price = net_pnl_data['exit_price']
+                    logger.info(f"Updated with Net PnL: {realized_pnl} (Exit: {final_price})")
+
                 await close_trade_db(trade['message_id'], exit_price=final_price, pnl=realized_pnl)
                 
                 current_price = await self.exchange.get_market_price(symbol)
@@ -709,7 +716,14 @@ class TelegramListener:
                                 pnl = float(last_trade['info']['cRealizedPL']) # Bitget V2 key?
                             elif 'realizedPnl' in last_trade: # CCXT unified
                                 pnl = float(last_trade['realizedPnl'] or 0.0)
-                                
+
+                            # Fetch Accurate Net PnL (including fees) via Position History
+                            net_pnl_data = await self.exchange.get_last_closed_pnl(symbol)
+                            if net_pnl_data:
+                                pnl = net_pnl_data['pnl']
+                                price = net_pnl_data['exit_price']
+                                logger.info(f"Updated with Net PnL: {pnl} (Exit: {price})")
+
                             icon = "🟢" if pnl >= 0 else "🔴"
                             reason = "Take Profit 🎯" if pnl >= 0 else "Stop Loss 🛑"
                             
