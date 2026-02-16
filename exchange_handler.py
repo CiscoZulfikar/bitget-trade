@@ -680,8 +680,8 @@ class ExchangeHandler:
     async def update_tp(self, symbol, new_tp):
         try:
             # 1. Get current position to know side
-            position = await self.get_position(symbol)
-            if not position:
+            pos = await self.get_position(symbol)
+            if not pos:
                 # Fallback: Check for Open Limit Order to Update (Cancel & Replace)
                 resolved_symbol = await self.resolve_symbol(symbol)
                 orders = await self.exchange.fetch_open_orders(resolved_symbol)
@@ -694,54 +694,31 @@ class ExchangeHandler:
                 logger.warning(f"Cannot update TP for {symbol}: No active position.")
                 return False, "No active position or open limit order found."
 
-            side = position['side']  # 'long' or 'short'
+            side = pos['side']  # 'long' or 'short'
 
-            # 2. Cancel Existing TP Orders (Plan Orders)
-            try:
-                if hasattr(self.exchange, 'privateMixGetV2MixOrderOrdersPlanPending'):
-                    # Sanitize Symbol
-                    raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
-                    params = {
-                        "symbol": raw_symbol,
-                        "productType": "USDT-FUTURES",
-                        "planType": "profit_plan"
-                    }
-                    resp = await self.exchange.privateMixGetV2MixOrderOrdersPlanPending(params)
-
-                    if resp['code'] == '00000' and 'entrustedList' in resp['data']:
-                        for o in resp['data']['entrustedList']:
-                            oid = o['orderId']
-                            # Cancel
-                            cancel_params = {
-                                "symbol": raw_symbol,
-                                "productType": "USDT-FUTURES",
-                                "orderId": oid,
-                                "planType": "profit_plan"
-                            }
-                            await self.exchange.privateMixPostV2MixOrderCancelPlanOrder(cancel_params)
-                            logger.info(f"Cancelled old TP order {oid} for {symbol}")
-            except Exception as e:
-                logger.warning(f"Error cancelling old TPs: {e}")
-
-            # 3. Place New TP
+            # 2. Use PlacePosTpsl (Overwrite mode)
             try:
                 raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
+                
+                # Setup params for Position TPSL
+                # Note: Bitget V2 usually overwrites if we send a new one? 
+                # Or we might need to cancel old ones first. 
+                # Let's try sending just the new TP.
                 
                 params = {
                     "symbol": raw_symbol,
                     "productType": "USDT-FUTURES",
                     "marginCoin": "USDT",
-                    "planType": "profit_plan",
-                    "triggerPrice": str(new_tp),
+                    "tpPrice": str(new_tp), # Specific param for this endpoint
                     "holdSide": "long" if side == "long" else "short"
                 }
                 
-                await self.exchange.privateMixPostV2MixOrderPlacePlanOrder(params)
-                logger.info(f"Placed new TP plan order for {symbol} at {new_tp}")
+                await self.exchange.privateMixPostV2MixOrderPlacePosTpsl(params)
+                logger.info(f"Updated Position TP for {symbol} to {new_tp}")
                 return True, "Success"
                 
             except Exception as e:
-                logger.error(f"Failed to execute PlaceTP: {e}")
+                logger.error(f"Failed to execute PlacePosTpsl (TP): {e}")
                 return False, f"Failed to modify position TP: {e}"
 
         except Exception as e:
@@ -766,34 +743,7 @@ class ExchangeHandler:
 
             side = pos['side']
             
-            # 2. Cancel Old SLs
-            try:
-                if hasattr(self.exchange, 'privateMixGetV2MixOrderOrdersPlanPending'):
-                    # Sanitize Symbol
-                    raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
-                    params = {
-                        "symbol": raw_symbol,
-                        "productType": "USDT-FUTURES",
-                        "planType": "loss_plan"
-                    }
-                    resp = await self.exchange.privateMixGetV2MixOrderOrdersPlanPending(params)
-
-                    if resp['code'] == '00000' and 'entrustedList' in resp['data']:
-                        for o in resp['data']['entrustedList']:
-                            oid = o['orderId']
-                            # Cancel
-                            cancel_params = {
-                                "symbol": raw_symbol,
-                                "productType": "USDT-FUTURES",
-                                "orderId": oid,
-                                "planType": "loss_plan"
-                            }
-                            await self.exchange.privateMixPostV2MixOrderCancelPlanOrder(cancel_params)
-                            logger.info(f"Cancelled old SL order {oid} for {symbol}")
-            except Exception as e:
-                logger.warning(f"Error cancelling old SLs: {e}")
-
-            # 3. Place New SL
+            # 2. Use PlacePosTpsl (Overwrite mode)
             try:
                 raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
                 
@@ -801,17 +751,20 @@ class ExchangeHandler:
                     "symbol": raw_symbol,
                     "productType": "USDT-FUTURES",
                     "marginCoin": "USDT",
-                    "planType": "loss_plan",
-                    "triggerPrice": str(new_sl),
+                    "slPrice": str(new_sl),
                     "holdSide": "long" if side == "long" else "short"
                 }
                 
-                await self.exchange.privateMixPostV2MixOrderPlacePlanOrder(params)
-                logger.info(f"Placed new SL plan order for {symbol} at {new_sl}")
+                # Check method presence
+                if not hasattr(self.exchange, 'privateMixPostV2MixOrderPlacePosTpsl'):
+                     raise Exception("Method privateMixPostV2MixOrderPlacePosTpsl not found in CCXT")
+
+                await self.exchange.privateMixPostV2MixOrderPlacePosTpsl(params)
+                logger.info(f"Updated Position SL for {symbol} to {new_sl}")
                 return True, "Success"
                 
             except Exception as e:
-                 logger.error(f"Failed to execute PlaceSL: {e}")
+                 logger.error(f"Failed to execute PlacePosTpsl (SL): {e}")
                  return False, f"Failed to modify position SL: {e}"
                  
         except Exception as e:
