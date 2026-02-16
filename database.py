@@ -114,6 +114,12 @@ async def update_trade_order_id(message_id, order_id):
         await db.execute('UPDATE trades SET order_id = ? WHERE message_id = ?', (order_id, message_id))
         await db.commit()
 
+async def update_trade_entry(message_id, entry_price):
+    """Update the entry price for a trade (Sync with Exchange)."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute('UPDATE trades SET entry_price = ? WHERE message_id = ?', (entry_price, message_id))
+        await db.commit()
+
 async def update_trade_sl(message_id, sl_price):
     """Update the SL price."""
     async with aiosqlite.connect(DB_NAME) as db:

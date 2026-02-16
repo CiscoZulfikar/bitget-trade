@@ -270,9 +270,17 @@ class TelegramListener:
             )
             
             if order:
+                # Capture Actual Fill Price if available
+                fill_price = entry_price # Default to plan
+                if order.get('average'):
+                    fill_price = float(order['average'])
+                elif order.get('price'):
+                     # fallback for limit orders (might not be filled yet, but better than signal entry)
+                     fill_price = float(order['price'])
+                
                 # UPDATE the reserved trade (PROCESSING -> OPEN)
-                await update_trade_full(msg_id, order['id'], symbol, entry_price, sl_price, tp_price=tp_price, status="OPEN")
-                await self.notifier.send(f"🟢 {final_order_type} Order Opened: {symbol} at {exec_price} with {leverage}x.\n**TP:** {tp_display}\n**SL:** {sl_price}\n**Margin:** ${position_size_usdt:.2f}\nReason: {reason}")
+                await update_trade_full(msg_id, order['id'], symbol, fill_price, sl_price, tp_price=tp_price, status="OPEN")
+                await self.notifier.send(f"🟢 {final_order_type} Order Opened: {symbol} at {fill_price} with {leverage}x.\n**TP:** {tp_display}\n**SL:** {sl_price}\n**Margin:** ${position_size_usdt:.2f}\nReason: {reason}")
             else:
                 # Should not happen if place_order raises on error, but handled for safety
                 await self.notifier.send(f"⚠️ Execution failed for {symbol} (Unknown reason/None returned).")
@@ -718,6 +726,21 @@ class TelegramListener:
                             
                             # We might have multiple if bugged, but usually one OPEN per symbol
                             target_trade = next((t for t in open_trades if t['symbol'] == normalized_symbol or t['symbol'] == symbol), None)
+                            
+                            # --- SYNC ENTRY PRICE ---
+                            if target_trade and symbol in current_positions:
+                                try:
+                                    pos = current_positions[symbol]
+                                    real_entry = float(pos.get('entryPrice', 0.0))
+                                    db_entry = float(target_trade['entry_price'])
+                                    
+                                    # If difference is > 0.1%, sync it (avoid minor float diffs)
+                                    if real_entry > 0 and abs(real_entry - db_entry) / db_entry > 0.001:
+                                        await update_trade_entry(target_trade['message_id'], real_entry)
+                                        logger.info(f"🔄 Synced Entry Price for {symbol}: {db_entry} -> {real_entry}")
+                                except Exception as sync_e:
+                                    logger.error(f"Entry Sync Error for {symbol}: {sync_e}")
+                            # ------------------------
                             
                             if target_trade:
                                 await close_trade_db(target_trade['message_id'], exit_price=price, pnl=pnl)
