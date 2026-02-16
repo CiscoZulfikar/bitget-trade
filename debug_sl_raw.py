@@ -16,7 +16,8 @@ async def main():
         'apiKey': API_KEY,
         'secret': SECRET,
         'password': PASSPHRASE,
-        'options': {'defaultType': 'swap'}
+        'options': {'defaultType': 'swap'},
+        'verbose': True  # ENABLE VERBOSE LOGGING
     })
 
     # HARDCODED TEST PARAMS
