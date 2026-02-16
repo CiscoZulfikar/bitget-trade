@@ -21,41 +21,45 @@ async def main():
     })
 
     # VARIATIONS TO TRY
-    symbols = ["ETHUSDT", "ETHUSDT_UMCBL"]
-    productTypes = ["USDT-FUTURES", "umcbl"]
-    planTypes = ['loss_plan', 'normal_plan', 'pos_loss']
+    symbols = ["ETHUSDT"]
+    productTypes = ["USDT-FUTURES"]
+    planTypes = ['loss_plan', 'normal_plan', 'pos_loss', 'profit_plan', 'pos_profit']
+    holdSides = ['short'] # User is short
 
     for s in symbols:
         for p_type in productTypes:
             for plan in planTypes:
-                print(f"\nTrying Symbol={s}, Product={p_type}, Plan={plan}...")
-                try:
-                    params = {
-                        "symbol": s,
-                        "productType": p_type,
-                        "planType": plan
-                    }
-                    resp = await exchange.privateMixGetV2MixOrderOrdersPlanPending(params)
-                    
-                    if resp['code'] == '00000':
-                        data = resp['data']
-                        if data and 'entrustedList' in data and data['entrustedList']:
-                            print(f"✅ FOUND ORDERS! Symbol={s}, Product={p_type}, Plan={plan}")
-                            for o in data['entrustedList']:
-                                print(f" - ID: {o['orderId']}, Type: {o['planType']}, Trigger: {o['triggerPrice']}")
+                for side in holdSides:
+                    print(f"\nTrying Symbol={s}, Product={p_type}, Plan={plan}, Side={side}...")
+                    try:
+                        params = {
+                            "symbol": s,
+                            "productType": p_type,
+                            "planType": plan,
+                            "holdSide": side # ADDED THIS
+                        }
+                        resp = await exchange.privateMixGetV2MixOrderOrdersPlanPending(params)
+                        
+                        if resp['code'] == '00000':
+                            data = resp['data'] if resp['data'] else {}
+                            entrusted = data.get('entrustedList', [])
+                            
+                            if entrusted:
+                                print(f"✅ FOUND ORDERS! Symbol={s}, Plan={plan}, Side={side}")
+                                for o in entrusted:
+                                    print(f" - ID: {o['orderId']}, Type: {o['planType']}, Trigger: {o['triggerPrice']}")
+                            else:
+                                print(f" - No orders (Clean response)")
                         else:
-                            print(f" - No orders (Clean response)")
-                    else:
-                        print(f" - Error: {resp['msg']} (Code: {resp['code']})")
-                
-                except Exception as e:
-                    # Ignore standard errors to keep output clean, just print brief
-                    if "40812" in str(e):
-                        print(f" - 40812: Type not met")
-                    elif "40034" in str(e) or "40017" in str(e):
-                         print(f" - Param Error: {e}")
-                    else:
-                        print(f" - EXCEPTION: {e}")
+                            print(f" - Error: {resp['msg']} (Code: {resp['code']})")
+                    
+                    except Exception as e:
+                        if "40812" in str(e):
+                            print(f" - 40812: Type not met")
+                        elif "40034" in str(e) or "40017" in str(e):
+                             print(f" - Param Error: {e}")
+                        else:
+                            print(f" - EXCEPTION: {e}")
 
     await exchange.close()
 
