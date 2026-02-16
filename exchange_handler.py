@@ -748,5 +748,75 @@ class ExchangeHandler:
             logger.error(f"Update TP failed: {e}")
             return False, str(e)
 
+    async def update_sl(self, symbol, new_sl):
+        try:
+            # 1. Get current position
+            pos = await self.get_position(symbol)
+            if not pos:
+                 # Fallback: Check for Open Limit Order
+                resolved_symbol = await self.resolve_symbol(symbol)
+                orders = await self.exchange.fetch_open_orders(resolved_symbol)
+                limit_order = next((o for o in orders if o['type'] == 'limit'), None)
+                
+                if limit_order:
+                    logger.info(f"Found Limit Order {limit_order['id']} for {symbol}. updating SL via Replace.")
+                    return await self.replace_limit_order(resolved_symbol, limit_order, new_sl=new_sl)
+
+                return False, "No active position/order found."
+
+            side = pos['side']
+            
+            # 2. Cancel Old SLs
+            try:
+                if hasattr(self.exchange, 'privateMixGetV2MixOrderOrdersPlanPending'):
+                    # Sanitize Symbol
+                    raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
+                    params = {
+                        "symbol": raw_symbol,
+                        "productType": "USDT-FUTURES",
+                        "planType": "loss_plan"
+                    }
+                    resp = await self.exchange.privateMixGetV2MixOrderOrdersPlanPending(params)
+
+                    if resp['code'] == '00000' and 'entrustedList' in resp['data']:
+                        for o in resp['data']['entrustedList']:
+                            oid = o['orderId']
+                            # Cancel
+                            cancel_params = {
+                                "symbol": raw_symbol,
+                                "productType": "USDT-FUTURES",
+                                "orderId": oid,
+                                "planType": "loss_plan"
+                            }
+                            await self.exchange.privateMixPostV2MixOrderCancelPlanOrder(cancel_params)
+                            logger.info(f"Cancelled old SL order {oid} for {symbol}")
+            except Exception as e:
+                logger.warning(f"Error cancelling old SLs: {e}")
+
+            # 3. Place New SL
+            try:
+                raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
+                
+                params = {
+                    "symbol": raw_symbol,
+                    "productType": "USDT-FUTURES",
+                    "marginCoin": "USDT",
+                    "planType": "loss_plan",
+                    "triggerPrice": str(new_sl),
+                    "holdSide": "long" if side == "long" else "short"
+                }
+                
+                await self.exchange.privateMixPostV2MixOrderPlacePlanOrder(params)
+                logger.info(f"Placed new SL plan order for {symbol} at {new_sl}")
+                return True, "Success"
+                
+            except Exception as e:
+                 logger.error(f"Failed to execute PlaceSL: {e}")
+                 return False, f"Failed to modify position SL: {e}"
+                 
+        except Exception as e:
+            logger.error(f"Update SL failed: {e}")
+            return False, str(e)
+
     async def close(self):
         await self.exchange.close()
