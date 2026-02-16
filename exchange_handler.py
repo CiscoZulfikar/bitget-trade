@@ -778,13 +778,15 @@ class ExchangeHandler:
             trigger_price = self.exchange.price_to_precision(symbol, new_sl)
             
             # 2. Cancel Old SLs (loss_plan AND pos_loss)
-            for p_type in ['loss_plan', 'pos_loss']:
+            for p_type in ['loss_plan', 'pos_loss', 'normal_plan']: # Added normal_plan
                 try:
                     if hasattr(self.exchange, 'privateMixGetV2MixOrderOrdersPlanPending'):
                         params = {
                             "symbol": raw_symbol,
                             "productType": "USDT-FUTURES",
-                            "planType": p_type
+                            "planType": p_type,
+                            "marginCoin": "USDT", # CRITICAL FIX
+                            "holdSide": "long" if side == "long" else "short" # CRITICAL FIX
                         }
                         resp = await self.exchange.privateMixGetV2MixOrderOrdersPlanPending(params)
 
@@ -797,7 +799,9 @@ class ExchangeHandler:
                                     "symbol": raw_symbol,
                                     "productType": "USDT-FUTURES",
                                     "orderId": oid,
-                                    "planType": actual_type
+                                    "planType": actual_type,
+                                    "marginCoin": "USDT", # Add to cancel too for safety
+                                    "holdSide": "long" if side == "long" else "short"
                                 }
                                 await self.exchange.privateMixPostV2MixOrderCancelPlanOrder(cancel_params)
                                 logger.info(f"Cancelled old SL order {oid} ({actual_type}) for {symbol}")
