@@ -502,9 +502,18 @@ class ExchangeHandler:
             
             logger.info(f"Closing {side.upper()} position for {symbol} (Size: {size})...")
             
-            # 5. Execute Market Order
-            # create_market_order(symbol, side, amount, price=None, params={})
-            order = await self.exchange.create_market_order(symbol, trade_side, size, params=params)
+            # 5. Execute Market Order (First Attempt: Hedge Mode)
+            try:
+                order = await self.exchange.create_market_order(symbol, trade_side, size, params=params)
+            except Exception as e:
+                # Handle "40774: The order type for unilateral position must also be the unilateral position type"
+                if "40774" in str(e) or "unilateral" in str(e).lower():
+                    logger.warning(f"Failed to close {symbol} in Hedge Mode (40774). Retrying in One-Way Mode...")
+                    # Retry WITHOUT posSide
+                    params_oneway = {'reduceOnly': True}
+                    order = await self.exchange.create_market_order(symbol, trade_side, size, params=params_oneway)
+                else:
+                    raise e # Re-raise other errors
             
             if order:
                 logger.info(f"Closed position for {symbol}. Order ID: {order['id']}")
