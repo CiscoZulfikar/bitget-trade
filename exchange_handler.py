@@ -699,16 +699,15 @@ class ExchangeHandler:
                 logger.warning(f"Cannot update TP for {symbol}: No active position.")
                 return False, "No active position or open limit order found."
 
-            side = pos['side']
+            side = pos['side'].lower()
             size = pos['contracts']
             raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
             
             # FORMAT PRICE
             trigger_price = self.exchange.price_to_precision(symbol, new_tp)
 
-            # 2. Cancel Existing TP Orders (profit_plan AND pos_profit)
-            # We iterate multiple types to be safe
-            for p_type in ['profit_plan', 'pos_profit']:
+            # 2. Cancel Existing TP Orders (Cleaned up payload for V2 API)
+            for p_type in ['profit_plan', 'pos_profit', 'profit_loss']:
                 try:
                     if hasattr(self.exchange, 'privateMixGetV2MixOrderOrdersPlanPending'):
                         params = {
@@ -718,10 +717,15 @@ class ExchangeHandler:
                         }
                         resp = await self.exchange.privateMixGetV2MixOrderOrdersPlanPending(params)
 
-                        if resp['code'] == '00000' and 'entrustedList' in resp['data']:
+                        if resp.get('code') == '00000' and resp.get('data') and 'entrustedList' in resp['data']:
                             for o in resp['data']['entrustedList']:
                                 oid = o['orderId']
-                                actual_type = o.get('planType', p_type) # Use actual type if present
+                                actual_type = o.get('planType', p_type)
+                                
+                                # Safety: don't cancel SLs by accident
+                                if actual_type in ['loss_plan', 'pos_loss']:
+                                    continue
+                                    
                                 # Cancel
                                 cancel_params = {
                                     "symbol": raw_symbol,
@@ -775,38 +779,39 @@ class ExchangeHandler:
 
                 return False, "No active position/order found."
 
-            side = pos['side']
+            side = pos['side'].lower()
             size = pos['contracts']
             raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
             
             # FORMAT PRICE
             trigger_price = self.exchange.price_to_precision(symbol, new_sl)
             
-            # 2. Cancel Old SLs (loss_plan AND pos_loss)
-            for p_type in ['loss_plan', 'pos_loss', 'normal_plan']: # Added normal_plan
+            # 2. Cancel Old SLs (Cleaned up payload for V2 API)
+            for p_type in ['loss_plan', 'pos_loss', 'normal_plan', 'profit_loss']:
                 try:
                     if hasattr(self.exchange, 'privateMixGetV2MixOrderOrdersPlanPending'):
                         params = {
                             "symbol": raw_symbol,
                             "productType": "USDT-FUTURES",
-                            "planType": p_type,
-                            "marginCoin": "USDT", # CRITICAL FIX
-                            "holdSide": "long" if side == "long" else "short" # CRITICAL FIX
+                            "planType": p_type
                         }
                         resp = await self.exchange.privateMixGetV2MixOrderOrdersPlanPending(params)
 
-                        if resp['code'] == '00000' and 'entrustedList' in resp['data']:
+                        if resp.get('code') == '00000' and resp.get('data') and 'entrustedList' in resp['data']:
                             for o in resp['data']['entrustedList']:
                                 oid = o['orderId']
                                 actual_type = o.get('planType', p_type)
+                                
+                                # Safety: don't cancel TPs by accident
+                                if actual_type in ['profit_plan', 'pos_profit']:
+                                    continue
+                                
                                 # Cancel
                                 cancel_params = {
                                     "symbol": raw_symbol,
                                     "productType": "USDT-FUTURES",
                                     "orderId": oid,
-                                    "planType": actual_type,
-                                    "marginCoin": "USDT", # Add to cancel too for safety
-                                    "holdSide": "long" if side == "long" else "short"
+                                    "planType": actual_type
                                 }
                                 await self.exchange.privateMixPostV2MixOrderCancelPlanOrder(cancel_params)
                                 logger.info(f"Cancelled old SL order {oid} ({actual_type}) for {symbol}")
@@ -819,7 +824,7 @@ class ExchangeHandler:
                     "symbol": raw_symbol,
                     "productType": "USDT-FUTURES",
                     "marginCoin": "USDT",
-                    "triggerPrice": trigger_price, # Use Formatted Price
+                    "triggerPrice": trigger_price,
                     "triggerType": "market_price",
                     "planType": "loss_plan",
                     "holdSide": "long" if side == "long" else "short",
@@ -837,6 +842,3 @@ class ExchangeHandler:
         except Exception as e:
             logger.error(f"Update SL failed: {e}")
             return False, str(e)
-
-    async def close(self):
-        await self.exchange.close()
