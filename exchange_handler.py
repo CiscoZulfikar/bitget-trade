@@ -48,6 +48,15 @@ class ExchangeHandler:
         """Fetches Balance Breakdown (Free vs Equity)."""
         balance = await self.exchange.fetch_balance(params={'type': 'swap'})
         
+        # Bitget Specifics:
+        # 'free': Available for trade (Cross margin balance - frozen)
+        # 'total': Equity (Balance + PnL)
+        # Note: CCXT mapping might vary, but widely:
+        # balance['USDT']['free'] = Available
+        # balance['USDT']['total'] = Equity (approx) or Wallet Balance
+        
+        # For Bitget Futures, we want "usdtEquity" which is often mapped to 'total'
+        # Let's return a detailed dict
         return {
             'free': balance.get('USDT', {}).get('free', 0.0),
             'equity': balance.get('USDT', {}).get('total', 0.0)
@@ -139,6 +148,8 @@ class ExchangeHandler:
             if "40789" in err_str:
                 return
             
+            # 400172: Has open positions/orders (Cannot switch)
+            # 43116: Generic 'condition not met' often for this too
             logger.warning(f"Set Hedge Mode Failed: {e}")
             raise Exception(f"Failed to set Hedge Mode. Close all active positions/orders for {symbol} on Bitget manually and try again. ({e})")
 
@@ -147,6 +158,7 @@ class ExchangeHandler:
             await self.exchange.set_margin_mode('isolated', symbol)
         except Exception as e:
              err_str = str(e)
+             # 40789: Already in that mode (Bitget might return this if already isolated)
              if "40789" in err_str:
                  return
              logger.warning(f"Set Isolated Margin Failed: {e}")
@@ -461,99 +473,51 @@ class ExchangeHandler:
         return order
 
     async def close_position(self, symbol):
-        """Closes the entire position for a symbol, SYNCING with actual size first."""
+        """Closes the entire position for a symbol (Hedge Mode + V2 API)."""
         try:
-            # SYNC: Fetch real position size
-            target_pos = await self.get_position(symbol)
+            # 1. Get current position to know SIDE and SIZE (SYNC)
+            # We fetch from exchange to ensure we close the ACTUAL open amount.
+            pos = await self.get_position(symbol)
+            if not pos:
+                logger.warning(f"No position found for {symbol} to close.")
+                return False
+
+            # 2. Extract Details
+            # contracts is the size (in COIN usually for inverse, but in USDT futures it's contracts/lot size?)
+            # create_market_order expects amount in base currency (e.g. BTC)
+            size = float(pos['contracts'])
+            side = pos['side'] # 'long' or 'short'
             
-            if target_pos:
-                side = 'sell' if target_pos['side'] == 'long' else 'buy'
-                amount = float(target_pos['contracts']) # Use actual exchange size
-                
-                logger.info(f"Closing position {symbol}. Real size: {amount}")
-                await self.exchange.create_order(symbol, 'market', side, amount)
+            # 3. Determine Side (Opposite to Open)
+            # LONG -> Sell to Close
+            # SHORT -> Buy to Close
+            trade_side = 'sell' if side == 'long' else 'buy'
+            
+            # 4. Parameters for Bitget V2 Hedge Mode
+            # posSide must be 'long' or 'short' (matching the position being closed)
+            params = {
+                'reduceOnly': True, # Explicitly reduce
+                'posSide': side,    # Vital: Close the LONG position or SHORT position?
+            }
+            
+            logger.info(f"Closing {side.upper()} position for {symbol} (Size: {size})...")
+            
+            # 5. Execute Market Order
+            # create_market_order(symbol, side, amount, price=None, params={})
+            order = await self.exchange.create_market_order(symbol, trade_side, size, params=params)
+            
+            if order:
+                logger.info(f"Closed position for {symbol}. Order ID: {order['id']}")
                 return True
             else:
-                logger.warning(f"No active position found for {symbol} on exchange to close.")
+                logger.error(f"Close position failed for {symbol} (No order returned).")
                 return False
+
         except Exception as e:
-            logger.error(f"Close position failed: {e}")
+            logger.error(f"Exception closing position for {symbol}: {e}")
             return False
 
-    async def update_sl(self, symbol, order_id, new_sl, risk_manager=None):
-        try:
-            # 1. Get current position to know side (long/short)
-            position = await self.get_position(symbol)
-            if not position:
-                # Fallback: Check for Open Limit Order to Update (Cancel & Replace)
-                resolved_symbol = await self.resolve_symbol(symbol)
-                orders = await self.exchange.fetch_open_orders(resolved_symbol)
-                limit_order = next((o for o in orders if o['type'] == 'limit'), None)
-                
-                if limit_order:
-                    logger.info(f"Found Open Limit Order {limit_order['id']} for {symbol} ({resolved_symbol}). Updating SL via Replace.")
-                    return await self.replace_limit_order(resolved_symbol, limit_order, new_sl=new_sl, risk_manager=risk_manager)
-                
-                logger.warning(f"Cannot update SL for {symbol}: No active position or open limit order.")
-                return False, "No active position or open limit order found."
 
-            side = position['side'] # 'long' or 'short'
-            
-            # 2. Cancel Existing SL Orders (Plan Orders)
-            # Use Raw API to find and cancel 'loss_plan' orders
-            try:
-                if hasattr(self.exchange, 'privateMixGetV2MixOrderOrdersPlanPending'):
-                    # Sanitize Symbol
-                    raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
-                    params = {
-                        "symbol": raw_symbol,
-                        "productType": "USDT-FUTURES", 
-                        "planType": "loss_plan"
-                    }
-                    resp = await self.exchange.privateMixGetV2MixOrderOrdersPlanPending(params)
-                    
-                    if resp['code'] == '00000' and 'entrustedList' in resp['data']:
-                        for o in resp['data']['entrustedList']:
-                             oid = o['orderId']
-                             # Cancel
-                             cancel_params = {
-                                 "symbol": raw_symbol,
-                                 "productType": "USDT-FUTURES", 
-                                 "orderId": oid,
-                                 "planType": "loss_plan"
-                             }
-                             await self.exchange.privateMixPostV2MixOrderCancelPlanOrder(cancel_params)
-                             logger.info(f"Cancelled old SL order {oid} for {symbol}")
-            except Exception as e:
-                logger.warning(f"Error cancelling old SLs: {e}")
-
-            # 3. Place New SL (TPSL Order for Position)
-            try:
-                raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
-                req = {
-                    "symbol": raw_symbol,
-                    "productType": "USDT-FUTURES",
-                    "marginCoin": "USDT",
-                    "planType": "loss_plan",
-                    "triggerPrice": str(new_sl),
-                    "triggerType": "market_price",
-                    "holdSide": side # long/short
-                }
-                res = await self.exchange.privateMixPostV2MixOrderPlaceTPSL(req)
-                
-                if res['code'] == '00000':
-                    logger.info(f"Updated SL for {symbol} to {new_sl} (ID: {res['data']['orderId']})")
-                    return True, "Success"
-                else:
-                     logger.error(f"Failed to place new SL: {res}")
-                     return False, f"API Error: {res.get('msg', 'Unknown')}"
-            except Exception as e:
-                logger.error(f"Failed to execute PlaceTPSL: {e}")
-                return False, f"Exception: {str(e)}"
-
-        except Exception as e:
-            logger.error(f"Update SL failed: {e}")
-            return False, f"Exception: {str(e)}"
 
     async def replace_limit_order(self, symbol, order, new_sl=None, new_tp=None, risk_manager=None):
         """Cancels an existing limit order and places a new one with updated params. Includes Rollback."""
