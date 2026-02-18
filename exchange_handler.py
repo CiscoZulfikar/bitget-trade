@@ -482,7 +482,7 @@ class ExchangeHandler:
                 return False
 
             size = float(pos['contracts'])
-            side = pos['side'] # 'long' or 'short'
+            side = pos['side'].lower() # 'long' or 'short'
             
             # Bitget V2 API requires the raw symbol (e.g., ETHUSDT)
             raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
@@ -490,15 +490,18 @@ class ExchangeHandler:
             logger.info(f"Closing {side.upper()} position for {symbol} (Size: {size})...")
             
             # 2. Parameters for Bitget V2 Hedge Mode
-            # 'close_long' closes longs, 'close_short' closes shorts
-            api_side_hedge = "close_long" if side == "long" else "close_short"
+            # In V2 Hedge Mode:
+            # 'side' represents the POSITION direction (buy=Long, sell=Short)
+            # 'tradeSide' represents the ACTION (open or close)
+            hedge_side = "buy" if side == "long" else "sell"
             
             params = {
                 "symbol": raw_symbol,
                 "productType": "USDT-FUTURES",
                 "marginCoin": "USDT",
                 "size": str(size),
-                "side": api_side_hedge,
+                "side": hedge_side,
+                "tradeSide": "close",
                 "orderType": "market"
             }
             
@@ -517,11 +520,16 @@ class ExchangeHandler:
                 if "40774" in err_str or "unilateral" in err_str.lower():
                     logger.warning(f"Failed to close {symbol} in Hedge Mode (40774). Retrying in One-Way Mode via V2 API...")
                     
-                    # For One-Way (Unilateral) Mode: 'sell_single' closes long, 'buy_single' closes short
-                    api_side_oneway = "sell_single" if side == "long" else "buy_single"
+                    # For One-Way (Unilateral) Mode:
+                    # 'side' is the order direction: to close a long, we 'sell'. to close a short, we 'buy'.
+                    oneway_side = "sell" if side == "long" else "buy"
                     
-                    params["side"] = api_side_oneway
+                    # Update params for One-Way
+                    params["side"] = oneway_side
                     params["reduceOnly"] = "YES" # V2 Requirement: strictly reduce to avoid accidental flipping
+                    
+                    # tradeSide is NOT used in One-Way mode, so remove it safely
+                    params.pop("tradeSide", None)
                     
                     try:
                         res_oneway = await self.exchange.privateMixPostV2MixOrderPlaceOrder(params)
