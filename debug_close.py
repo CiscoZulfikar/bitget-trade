@@ -32,31 +32,45 @@ async def main():
              target_pos = None
 
         if not target_pos:
-            logger.info("No open position found for ETHUSDT. Attempting to OPEN a small dust position to test closing? (SKIPPING FOR NOW)")
-            # return
+            logger.info("No open position found for ETHUSDT. Cannot test close.")
+            return
         else:
             logger.info(f"Found Position: {target_pos['side']} {target_pos['contracts']}")
-            logger.info(f"Raw Info: {json.dumps(target_pos['info'], indent=2)}")
-
-            # Check Margin Mode
-            # marginMode usually in info
-            logger.info(f"Margin Mode: {target_pos['info'].get('marginMode')}")
-            logger.info(f"Hold Mode: {target_pos['info'].get('holdMode')}") # double_hold (Hedge) or single_hold (One-Way)
-
-            side = target_pos['side']
-            size = float(target_pos['contracts'])
+            
+            side = target_pos['side'] # 'short'
             trade_side = 'sell' if side == 'long' else 'buy'
+            
+            # Close Dust Amount
+            size = 0.01 # Min size might be 0.01? 
+            # ETH price ~2600. 0.01 = $26. 
+            # Check min amount?
+            # Assuming 0.01 is valid for now.
+            
+            logger.info(f"Attempting to Close Dust {size} {symbol} ({side}) with tradeSide='close'...")
 
-            # 2. Test Close - One Way Strict
-            logger.info("Tentative Close - Test 1: Empty Params (One-Way Standard)")
+            # Params for Hedge Mode Close
+            params = {
+                'posSide': side,    # 'short'
+                'tradeSide': 'close', # Explicitly close
+                # 'reduceOnly': True # Optional if tradeSide is close?
+            }
+            
             try:
-                # We won't actually execute if we can validly validate, but create_order validates.
-                # Let's try to place a reduceOnly order without posSide
-                params = {'reduceOnly': True}
-                # order = await exchange.create_market_order(symbol, trade_side, size, params=params)
-                # logger.info(f"Test 1 Success: {order['id']}")
+                order = await exchange.create_market_order(symbol, trade_side, size, params=params)
+                logger.info(f"SUCCESS! Order Placed: {order['id']}")
             except Exception as e:
-                logger.error(f"Test 1 Failed: {e}")
+                logger.error(f"FAILED with tradeSide='close': {e}")
+                
+            # If that failed, try with reduceOnly=True as well?
+            if 'order' not in locals():
+                 logger.info("Retrying with reduceOnly=True AND tradeSide='close'...")
+                 params['reduceOnly'] = True
+                 try:
+                    order = await exchange.create_market_order(symbol, trade_side, size, params=params)
+                    logger.info(f"SUCCESS! Order Placed (Retry): {order['id']}")
+                 except Exception as e:
+                    logger.error(f"FAILED (Retry): {e}")
+
 
     except Exception as e:
         logger.error(f"General Error: {e}")
