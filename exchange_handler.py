@@ -473,65 +473,77 @@ class ExchangeHandler:
         return order
 
     async def close_position(self, symbol):
-        """Closes the entire position for a symbol (Hedge Mode + V2 API)."""
+        """Closes the entire position for a symbol (Supports Hedge & One-Way via Native V2 API)."""
         try:
             # 1. Get current position to know SIDE and SIZE (SYNC)
-            # We fetch from exchange to ensure we close the ACTUAL open amount.
             pos = await self.get_position(symbol)
             if not pos:
                 logger.warning(f"No position found for {symbol} to close.")
                 return False
 
-            # 2. Extract Details
-            # contracts is the size (in COIN usually for inverse, but in USDT futures it's contracts/lot size?)
-            # create_market_order expects amount in base currency (e.g. BTC)
             size = float(pos['contracts'])
             side = pos['side'] # 'long' or 'short'
             
-            # 3. Determine Side (Opposite to Open)
-            # LONG -> Sell to Close
-            # SHORT -> Buy to Close
-            trade_side = 'sell' if side == 'long' else 'buy'
-            
-            # 4. Parameters for Bitget V2 Hedge Mode
-            # posSide must be 'long' or 'short' (matching the position being closed)
-            params = {
-                'reduceOnly': True, # Explicitly reduce
-                'posSide': side,    # Vital: Close the LONG position or SHORT position?
-            }
+            # Bitget V2 API requires the raw symbol (e.g., ETHUSDT)
+            raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
             
             logger.info(f"Closing {side.upper()} position for {symbol} (Size: {size})...")
             
-            # 5. Execute Market Order (First Attempt: Hedge Mode)
-            try:
-                order = await self.exchange.create_market_order(symbol, trade_side, size, params=params)
-            except Exception as e:
-                # Handle "40774: The order type for unilateral position must also be the unilateral position type"
-                if "40774" in str(e) or "unilateral" in str(e).lower():
-                    logger.warning(f"Failed to close {symbol} in Hedge Mode (40774). Retrying in One-Way Mode (No Params)...")
-                    # Retry WITHOUT posSide AND WITHOUT reduceOnly (Strict One-Way)
-                    # In One-Way mode, an opposing order of checks size closes the position.
-                    params_oneway = {} 
-                    order = await self.exchange.create_market_order(symbol, trade_side, size, params=params_oneway)
-                else:
-                    raise e # Re-raise other errors
+            # 2. Parameters for Bitget V2 Hedge Mode
+            # 'close_long' closes longs, 'close_short' closes shorts
+            api_side_hedge = "close_long" if side == "long" else "close_short"
             
-            if order:
-                logger.info(f"Closed position for {symbol}. Order ID: {order['id']}")
-                return True
-            else:
-                logger.error(f"Close position failed for {symbol} (No order returned).")
-                return False
+            params = {
+                "symbol": raw_symbol,
+                "productType": "USDT-FUTURES",
+                "marginCoin": "USDT",
+                "size": str(size),
+                "side": api_side_hedge,
+                "orderType": "market"
+            }
+            
+            # 3. Execute via Raw V2 API
+            try:
+                res = await self.exchange.privateMixPostV2MixOrderPlaceOrder(params)
+                if res.get('code') == '00000':
+                    logger.info(f"Closed {symbol} successfully via V2 API (Hedge Mode). Order ID: {res['data']['orderId']}")
+                    return True
+                else:
+                    raise Exception(str(res))
+                    
+            except Exception as e:
+                err_str = str(e)
+                # Handle "40774: The order type for unilateral position must also be the unilateral position type"
+                if "40774" in err_str or "unilateral" in err_str.lower():
+                    logger.warning(f"Failed to close {symbol} in Hedge Mode (40774). Retrying in One-Way Mode via V2 API...")
+                    
+                    # For One-Way (Unilateral) Mode: 'sell_single' closes long, 'buy_single' closes short
+                    api_side_oneway = "sell_single" if side == "long" else "buy_single"
+                    
+                    params["side"] = api_side_oneway
+                    params["reduceOnly"] = "YES" # V2 Requirement: strictly reduce to avoid accidental flipping
+                    
+                    try:
+                        res_oneway = await self.exchange.privateMixPostV2MixOrderPlaceOrder(params)
+                        if res_oneway.get('code') == '00000':
+                            logger.info(f"Closed {symbol} successfully via V2 API (One-Way Mode). Order ID: {res_oneway['data']['orderId']}")
+                            return True
+                        else:
+                            logger.error(f"One-Way Mode Close failed: {res_oneway}")
+                            return False
+                    except Exception as fallback_e:
+                         logger.error(f"One-Way Mode Close exception: {fallback_e}")
+                         return False
+                else:
+                    logger.error(f"Failed to close {symbol} via V2 API: {e}")
+                    return False
 
         except Exception as e:
             logger.error(f"Exception closing position for {symbol}: {e}")
             return False
-
-
-
+            
     async def replace_limit_order(self, symbol, order, new_sl=None, new_tp=None, risk_manager=None):
         """Cancels an existing limit order and places a new one with updated params. Includes Rollback."""
-        
         # 1. Store Original State for Rollback
         original_id = order['id']
         original_amount = order['amount'] - order['filled']
@@ -638,6 +650,10 @@ class ExchangeHandler:
             logger.info(f"Cancelled all open orders for {symbol} ({resolved_symbol})")
             return True
         except Exception as e:
+            # Harmless error: API throws this if there's simply nothing to cancel
+            if "22001" in str(e) or "No order" in str(e):
+                logger.info(f"No open orders to cancel for {symbol}.")
+                return True
             logger.error(f"Failed to cancel orders for {symbol}: {e}")
             return False
 
