@@ -484,12 +484,17 @@ class ExchangeHandler:
             size = float(pos['contracts'])
             side = pos['side'].lower() # 'long' or 'short'
             
+            # 2. Extract Margin Mode (Bitget V2 API expects 'isolated' or 'crossed')
+            margin_mode = pos.get('marginMode', 'isolated').lower()
+            if margin_mode == 'cross':  # Map CCXT shorthand to Bitget strict string
+                margin_mode = 'crossed'
+            
             # Bitget V2 API requires the raw symbol (e.g., ETHUSDT)
             raw_symbol = symbol.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
             
-            logger.info(f"Closing {side.upper()} position for {symbol} (Size: {size})...")
+            logger.info(f"Closing {side.upper()} position for {symbol} (Size: {size}, Margin: {margin_mode})...")
             
-            # 2. Parameters for Bitget V2 Hedge Mode
+            # 3. Parameters for Bitget V2 Hedge Mode
             # In V2 Hedge Mode:
             # 'side' represents the POSITION direction (buy=Long, sell=Short)
             # 'tradeSide' represents the ACTION (open or close)
@@ -498,6 +503,7 @@ class ExchangeHandler:
             params = {
                 "symbol": raw_symbol,
                 "productType": "USDT-FUTURES",
+                "marginMode": margin_mode,   # <--- FIX: Explicitly stating margin mode
                 "marginCoin": "USDT",
                 "size": str(size),
                 "side": hedge_side,
@@ -505,7 +511,7 @@ class ExchangeHandler:
                 "orderType": "market"
             }
             
-            # 3. Execute via Raw V2 API
+            # 4. Execute via Raw V2 API
             try:
                 res = await self.exchange.privateMixPostV2MixOrderPlaceOrder(params)
                 if res.get('code') == '00000':
