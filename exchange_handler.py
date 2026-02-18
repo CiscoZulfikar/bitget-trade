@@ -842,3 +842,9 @@ class ExchangeHandler:
         except Exception as e:
             logger.error(f"Update SL failed: {e}")
             return False, str(e)
+
+    async def close(self):
+        """Safely closes the CCXT exchange session to free up resources."""
+        if hasattr(self, 'exchange') and self.exchange:
+            await self.exchange.close()
+            logger.info("Closed CCXT exchange session.")

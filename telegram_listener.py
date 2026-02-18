@@ -922,8 +922,8 @@ class TelegramListener:
                     msg = (
                         f"📊 **Performance: {stat['label']}**\n"
                         f"--------------------------\n"
-                        f"🤖 **Auto (Trader's):** WR {a_wr:.1f}% ({stat['auto_wins']}/{stat['auto_total']}) | R: {stat['auto_r']:.2f}\n"
-                        f"🖐 **Manual:** WR {m_wr:.1f}% ({stat['manual_wins']}/{stat['manual_total']}) | R: {stat['manual_r']:.2f}\n"
+                        f"🤖 Auto: WR {a_wr:.1f}% ({stat['auto_wins']}/{stat['auto_total']}) | R: {stat['auto_r']:.2f}\n"
+                        f"🖐 Manual: WR {m_wr:.1f}% ({stat['manual_wins']}/{stat['manual_total']}) | R: {stat['manual_r']:.2f}\n"
                     )
                     await self.notifier.send(msg)
                     return
@@ -950,16 +950,18 @@ class TelegramListener:
                 
                 return (
                     f"**{label}**\n"
-                    f"🤖 **Auto:** WR {a_wr:.1f}% ({a_win}/{a_tot}) | R: {a_r:.2f}\n"
-                    f"🖐 **Manual:** WR {m_wr:.1f}% ({m_win}/{m_tot}) | R: {m_r:.2f}"
+                    f"🤖 Auto: WR {a_wr:.1f}% ({a_win}/{a_tot}) | R: {a_r:.2f}\n"
+                    f"🖐 Manual: WR {m_wr:.1f}% ({m_win}/{m_tot}) | R: {m_r:.2f}"
                 )
                 
             msg = "📊 **Performance Dashboard**\n\n"
             msg += fmt_stat('monthly') + "\n\n"
             msg += fmt_stat('prev_monthly') + "\n\n"
             msg += fmt_stat('quarterly') + "\n\n"
+            msg += fmt_stat('prev_quarterly') + "\n\n"
             msg += fmt_stat('yearly') + "\n\n"
-            msg += fmt_stat('lifetime') + "\n"
+            msg += fmt_stat('prev_yearly') + "\n\n"
+            msg += fmt_stat('lifetime')
             
             await self.notifier.send(msg)
 
