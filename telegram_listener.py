@@ -748,6 +748,36 @@ class TelegramListener:
                 # Update Cache
                 last_positions = current_positions
                 
+                # --- 🕵️ AUTO-DETECT MANUAL TRADES ---
+                try:
+                    open_trades_sync = await get_all_open_trades()
+                    db_symbols = [t['symbol'] for t in open_trades_sync]
+                    
+                    for pos_sym, pos_data in current_positions.items():
+                        norm_pos = pos_sym.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
+                        
+                        # If the exchange has a position NOT in our DB, it was made manually!
+                        if norm_pos not in db_symbols:
+                            import time
+                            # Generate a unique negative message ID for the database
+                            dummy_id = -int(time.time() * 1000) % 1000000000
+                            entry_px = float(pos_data.get('entryPrice', 0))
+                            side = pos_data.get('side', 'long').upper()
+                            leverage = pos_data.get('leverage', 1)
+                            
+                            # Add to Database so it tracks PnL and History natively
+                            await store_trade(dummy_id, "MANUAL", norm_pos, entry_px, 0.0, 0.0, "OPEN", trade_type="MANUAL")
+                            await update_trade_full(dummy_id, "MANUAL", norm_pos, entry_px, 0.0, 0.0, "OPEN", side, leverage, "Manual Trade")
+                            
+                            logger.info(f"Detected Manual Trade {norm_pos}. Added to DB with ID {dummy_id}.")
+                            await self.notifier.send(f"🕵️ **Manual Trade Detected:** {norm_pos} ({side} x{leverage})\nBot is now tracking this position. You can manage it via chat!")
+                            
+                            # Add to db_symbols to prevent duplicate alerts
+                            db_symbols.append(norm_pos)
+                except Exception as detect_e:
+                    logger.error(f"Manual Trade Detection Error: {detect_e}")
+                # ----------------------------------
+                
                 # --- SYNC OPEN TRADES ENTRY PRICE ---
                 try:
                     open_trades_sync = await get_all_open_trades()
@@ -801,19 +831,22 @@ class TelegramListener:
                 # Format Timestamps
                 def fmt_ts(raw):
                     if not raw: return "?"
-                    # raw is "YYYY-MM-DD HH:MM:SS" (WIB)
-                    return str(raw) # Return full string with seconds
+                    return str(raw)
 
                 start_ts = fmt_ts(t.get('timestamp'))
                 end_ts = fmt_ts(t.get('closed_timestamp')) if t['status'] == "CLOSED" else None
 
+                # NEW: Determine Trade Type Icon
+                t_type = t.get('trade_type', 'AUTO')
+                type_icon = "🤖 Auto" if t_type == "AUTO" else "🖐 Manual"
+
                 # Header Construction
-                header = f"🟢 [OPEN] **{t['symbol']}**"
+                header = f"🟢 [OPEN] **{t['symbol']}** ({type_icon})"
                 if t['status'] == "CLOSED":
                      # Dynamic Icon based on Pnl
                      pnl = t.get('pnl', 0)
                      icon = "🟢" if pnl > 0 else "🔴"
-                     header = f"{icon} [CLOSED] **{t['symbol']}**"
+                     header = f"{icon} [CLOSED] **{t['symbol']}** ({type_icon})"
 
                 # Basic Info
                 row_msg = (
@@ -867,13 +900,9 @@ class TelegramListener:
                 # Custom Lookup
                 try:
                     import datetime
-                    # simple parsing
-                    # Case 1: "April 2026"
-                    # Case 2: "04 2026"
                     month_str = parts[1]
                     year_str = parts[2] if len(parts) > 2 else str(datetime.datetime.now().year)
                     
-                    # Map Month Name to Int
                     month_map = {
                         "JAN": 1, "JANUARY": 1, "FEB": 2, "FEBRUARY": 2, "MAR": 3, "MARCH": 3,
                         "APR": 4, "APRIL": 4, "MAY": 5, "JUN": 6, "JUNE": 6, "JUL": 7, "JULY": 7,
@@ -881,26 +910,20 @@ class TelegramListener:
                         "NOV": 11, "NOVEMBER": 11, "DEC": 12, "DECEMBER": 12
                     }
                     
-                    month = 0
-                    if month_str.upper() in month_map:
-                        month = month_map[month_str.upper()]
-                    else:
-                        month = int(month_str)
-                        
+                    month = month_map.get(month_str.upper(), 0)
+                    if month == 0: month = int(month_str)
                     year = int(year_str)
                     
                     stat = await get_monthly_stats(month, year)
                     
-                    total = stat['total']
-                    wins = stat['wins']
-                    wr = (wins / total * 100) if total > 0 else 0
-                    r_sum = stat['total_r']
+                    a_wr = (stat['auto_wins'] / stat['auto_total'] * 100) if stat['auto_total'] > 0 else 0
+                    m_wr = (stat['manual_wins'] / stat['manual_total'] * 100) if stat['manual_total'] > 0 else 0
                     
                     msg = (
                         f"📊 **Performance: {stat['label']}**\n"
                         f"--------------------------\n"
-                        f"🏆 **Win Rate:** {wr:.1f}% ({wins}/{total})\n"
-                        f"💎 **Total R:** {r_sum:.2f}\n"
+                        f"🤖 **Auto (Trader's):** WR {a_wr:.1f}% ({stat['auto_wins']}/{stat['auto_total']}) | R: {stat['auto_r']:.2f}\n"
+                        f"🖐 **Manual:** WR {m_wr:.1f}% ({stat['manual_wins']}/{stat['manual_total']}) | R: {stat['manual_r']:.2f}\n"
                     )
                     await self.notifier.send(msg)
                     return
@@ -915,19 +938,27 @@ class TelegramListener:
             def fmt_stat(key):
                 data = stats[key]
                 label = data['label']
-                total = data['total']
-                wins = data['wins']
-                wr = (wins / total * 100) if total > 0 else 0
-                r_sum = data['total_r']
-                return f"**{label}:** WR {wr:.1f}% ({wins}/{total}) | R: {r_sum:.2f}"
+                a_tot = data['auto_total']
+                a_win = data['auto_wins']
+                a_wr = (a_win / a_tot * 100) if a_tot > 0 else 0
+                a_r = data['auto_r']
+                
+                m_tot = data['manual_total']
+                m_win = data['manual_wins']
+                m_wr = (m_win / m_tot * 100) if m_tot > 0 else 0
+                m_r = data['manual_r']
+                
+                return (
+                    f"**{label}**\n"
+                    f"🤖 **Auto:** WR {a_wr:.1f}% ({a_win}/{a_tot}) | R: {a_r:.2f}\n"
+                    f"🖐 **Manual:** WR {m_wr:.1f}% ({m_win}/{m_tot}) | R: {m_r:.2f}"
+                )
                 
             msg = "📊 **Performance Dashboard**\n\n"
-            msg += fmt_stat('monthly') + "\n"
+            msg += fmt_stat('monthly') + "\n\n"
             msg += fmt_stat('prev_monthly') + "\n\n"
-            msg += fmt_stat('quarterly') + "\n"
-            msg += fmt_stat('prev_quarterly') + "\n\n"
-            msg += fmt_stat('yearly') + "\n"
-            msg += fmt_stat('prev_yearly') + "\n\n"
+            msg += fmt_stat('quarterly') + "\n\n"
+            msg += fmt_stat('yearly') + "\n\n"
             msg += fmt_stat('lifetime') + "\n"
             
             await self.notifier.send(msg)
