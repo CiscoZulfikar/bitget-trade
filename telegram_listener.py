@@ -328,37 +328,40 @@ class TelegramListener:
         if symbol:
             symbol = symbol.replace("#", "").replace("$", "").upper()
             if not symbol.endswith("USDT"): symbol += "USDT"
-            # Find ANY open trade for this symbol
-            # (Currently our DB lookup is by msg_id, so we might need a new lookup or iterate)
-            # For simplicity in this iteration, we still rely heavily on reply_msg_id for exact match,
-            # BUT if we have a symbol, we can try to find the open trade for it.
-            # Let's implementation a 'get_open_trade_by_symbol' if needed, or just iterate in memory for now?
-            # Better: Use the DB.
-            # BUT, let's stick to the most robust method: Reply Context > Symbol Match.
-            pass
 
         # 2. Try to find trade by Reply ID
         if reply_msg_id and not trade:
             trade = await get_trade_by_msg_id(reply_msg_id)
         
-        # 3. If still no trade, but we have a symbol, try to find the latest OPEN trade for that symbol
+        # 3. If still no trade, try to find the latest OPEN trade for that symbol in DB
         if not trade and symbol:
-             # We need a helper for this. Let's do a quick DB query here or add to database.py
-             # For now, let's just warn if we can't find it via reply.
-             # actually, let's make it robust:
              trades = await get_all_open_trades()
              for t in trades:
                  if t['symbol'] == symbol:
                      trade = t
                      break
 
+        # 4. 🕵️ NEW: If STILL no DB trade, check the exchange directly for a manual trade!
+        if not trade and symbol:
+            pos = await self.exchange.get_position(symbol)
+            if pos:
+                logger.info(f"Manual position found on exchange for {symbol}. Creating temporary context.")
+                trade = {
+                    'message_id': -1, # Dummy ID so DB queries fail gracefully
+                    'symbol': symbol,
+                    'order_id': None,
+                    'status': 'OPEN'
+                }
+
         if not trade:
             logger.info(f"Update ignored: Could not find original trade for reply {reply_msg_id} or symbol {symbol}")
+            if symbol:
+                await self.notifier.send(f"⚠️ Could not find an open trade for {symbol} in the DB or Exchange.")
             return
 
         action = data['action']
         symbol = trade['symbol']
-        order_id = trade['order_id']
+        order_id = trade.get('order_id') # Use .get() since manual trades have None
 
         if is_mock or trade['status'] == 'MOCK':
             # Mock update
@@ -374,14 +377,12 @@ class TelegramListener:
             if isinstance(new_sl, str):
                 new_sl_upper = new_sl.upper()
                 if new_sl_upper in ["ENTRY", "BE", "BREAKEVEN", "LIQ", "LIQUIDATION"]:
-                     # Need active position data to resolve this
                      position = await self.exchange.get_position(symbol)
                      if not position:
                          await self.notifier.send(f"⚠️ Cannot move SL to {new_sl_upper}: No active position found for {symbol}.")
                          return
 
                      if new_sl_upper in ["ENTRY", "BE", "BREAKEVEN"]:
-                         # Smart Breakeven: Entry + 0.1% buffer on profit side
                          real_entry = float(position['entryPrice'])
                          pos_side = position.get('side', '').lower()
                          buffer_pct = 0.0013  # 0.13% gap to cover fees
@@ -393,35 +394,25 @@ class TelegramListener:
                          else:
                              new_sl = real_entry
                          
-                         logger.info(f"Breakeven: entry={real_entry}, new_sl={new_sl} ({pos_side})")
-                         
                      elif new_sl_upper in ["LIQ", "LIQUIDATION"]:
-                         # Set to Liquidation Price
                          liq_price = float(position['liquidationPrice'])
                          if liq_price <= 0:
                              await self.notifier.send(f"⚠️ Cannot move SL to Liq: Liquidation price is 0 or invalid.")
                              return
                          new_sl = liq_price
             
-            # If new_sl is purely numeric (or resolved to number above)
-            # Scale it (if it was a raw number, e.g. "SL 69000", verify it fits order of magnitude)
             if not isinstance(data['value'], str) or (isinstance(data['value'], str) and data['value'].upper() not in ["ENTRY", "BE", "LIQ", "BREAKEVEN", "LIQUIDATION"]):
-                 # Only scale if it came from the Signal (raw number)
                  market_price = await self.exchange.get_market_price(symbol)
                  new_sl = self.risk_manager.scale_price(new_sl, market_price)
             
-            # Scale it (if it was a raw number, e.g. "SL 69000", verify it fits order of magnitude)
-            # update_sl(symbol, new_sl) -> standard signature
             result = await self.exchange.update_sl(symbol, new_sl)
             
-            # Handle return (bool, msg)
             if isinstance(result, tuple):
                 success, msg = result
             else:
                 success, msg = result, "Unknown Error"
 
             if success:
-                # await update_trade_sl(trade['message_id'], new_sl) # KEEP INITIAL SL FOR R CALC
                 await self.notifier.send(f"🟡 Signal Edited: Updated SL for {symbol} to {new_sl}.")
             else:
                  await self.notifier.send(f"⚠️ Failed to update SL for {symbol}. Reason: {msg}")
@@ -431,19 +422,16 @@ class TelegramListener:
                 r_multiple = data['value']
                 logger.info(f"Booking {r_multiple}R.")
             
-            # Enhanced Close: Cancel open orders first (limits/TP/SL)
             await self.exchange.cancel_all_orders(symbol)
             success = await self.exchange.close_position(symbol)
             
             if success:
-                # Fetch details for DB persistence
                 last_trade = await self.exchange.get_last_trade(symbol)
                 final_price = 0.0
                 realized_pnl = 0.0
                 
                 if last_trade:
                     final_price = float(last_trade.get('price', 0.0))
-                    # Try to get PnL
                     if 'info' in last_trade and 'profit' in last_trade['info']:
                         realized_pnl = float(last_trade['info']['profit'])
                     elif 'info' in last_trade and 'cRealizedPL' in last_trade['info']:
@@ -451,13 +439,12 @@ class TelegramListener:
                     elif 'realizedPnl' in last_trade:
                          realized_pnl = float(last_trade['realizedPnl'] or 0.0)
 
-                # Fetch Accurate Net PnL (including fees) via Position History
                 net_pnl_data = await self.exchange.get_last_closed_pnl(symbol)
                 if net_pnl_data:
                     realized_pnl = net_pnl_data['pnl']
                     final_price = net_pnl_data['exit_price']
-                    logger.info(f"Updated with Net PnL: {realized_pnl} (Exit: {final_price})")
 
+                # Use message_id gracefully (ignores if -1 dummy ID)
                 await close_trade_db(trade['message_id'], exit_price=final_price, pnl=realized_pnl)
                 
                 current_price = await self.exchange.get_market_price(symbol)
@@ -466,24 +453,20 @@ class TelegramListener:
                 bal_data = await self.exchange.get_balance()
                 new_equity = bal_data['equity']
                 
-                reason_str = f"Take Profit ({realized_pnl} PnL)" if realized_pnl >= 0 else f"Stop Loss ({realized_pnl} PnL)"
+                reason_str = f"Take Profit ({realized_pnl:.2f} PnL)" if realized_pnl >= 0 else f"Stop Loss ({realized_pnl:.2f} PnL)"
                 
                 await self.notifier.send(f"🔴 Trade Closed: {symbol} at {display_price}. Equity: ${new_equity:.2f}.\n{reason_str}")
             else:
                 await self.notifier.send(f"⚠️ Failed to close (or no position for) {symbol}.")
 
         elif action == "CANCEL":
-            # Scenario 1: Reply Context -> Cancel Specific Order
-            if trade and trade.get('order_id'):
-                logger.info(f"Cancelling specific order {trade['order_id']} for {symbol}")
-                success = await self.exchange.cancel_order(symbol, trade['order_id'])
+            if order_id:
+                logger.info(f"Cancelling specific order {order_id} for {symbol}")
+                success = await self.exchange.cancel_order(symbol, order_id)
                 if success:
-                    await self.notifier.send(f"🚫 Cancelled Order `{trade['order_id']}` for {symbol}.")
+                    await self.notifier.send(f"🚫 Cancelled Order `{order_id}` for {symbol}.")
                 else:
-                    await self.notifier.send(f"⚠️ Failed to cancel order `{trade['order_id']}` (It might be filled or already cancelled). checking symbol-wide...")
-                    # Fallback? Maybe not automatically, user might want to know it failed.
-            
-            # Scenario 2: No Reply / General Symbol Cancel -> Cancel All
+                    await self.notifier.send(f"⚠️ Failed to cancel order `{order_id}` (It might be filled or already cancelled).")
             else:
                 logger.info(f"Cancelling ALL orders for {symbol}")
                 await self.exchange.cancel_all_orders(symbol)
@@ -491,15 +474,12 @@ class TelegramListener:
 
         elif action == "MOVE_TP":
             new_tp = data['value']
-            
-            # Scale if numeric (and not special string, though TP usually numeric)
             if not isinstance(new_tp, str):
                  market_price = await self.exchange.get_market_price(symbol)
                  new_tp = self.risk_manager.scale_price(new_tp, market_price)
             
             result = await self.exchange.update_tp(symbol, new_tp)
             
-            # Handle return (bool, msg)
             if isinstance(result, tuple):
                 success, msg = result
             else:
