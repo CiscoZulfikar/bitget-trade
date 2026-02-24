@@ -5,7 +5,7 @@ from config import TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_CHANNEL_ID, NOTI
 from parser import parse_message
 from risk_manager import RiskManager
 from exchange_handler import ExchangeHandler
-from database import store_trade, get_trade_by_msg_id, update_trade_order_id, update_trade_sl, close_trade_db, get_open_trade_count, get_all_open_trades, get_recent_trades, reserve_trade, update_trade_full, get_stats_report, get_monthly_stats, clear_all_trades, update_trade_entry
+from database import store_trade, get_trade_by_msg_id, update_trade_order_id, update_trade_sl, close_trade_db, get_open_trade_count, get_all_open_trades, get_recent_trades, reserve_trade, update_trade_full, get_stats_report, get_monthly_stats, clear_all_trades, update_trade_entry, update_trade_tp
 from notifier import Notifier
 
 logger = logging.getLogger(__name__)
@@ -815,6 +815,34 @@ class TelegramListener:
                             if real_entry > 0 and diff_pct > 0.001: # 0.1% diff
                                 await update_trade_entry(t['message_id'], real_entry)
                                 logger.info(f"🔄 Synced Entry Price for {t['symbol']}: {db_entry} -> {real_entry} (Diff: {diff_pct:.2%})")
+
+                            # --- SYNC STOP LOSS & TAKE PROFIT (ONLY IF MISSING) ---
+                            # User requested: Do not update if already exists (to keep original R calculation)
+                            db_sl = float(t.get('sl_price') or 0.0)
+                            db_tp = float(t.get('tp_price') or 0.0)
+
+                            if db_sl == 0.0 or db_tp == 0.0:
+                                # Fetch active SL/TP from exchange
+                                # We use pos_sym if match_pos was found (which it was, at line 805)
+                                # But we need pos_sym again. Let's find it.
+                                
+                                # Find original pos_sym from current_positions
+                                current_pos_sym = next((ps for ps, pd in current_positions.items() if pd == match_pos), t['symbol'])
+                                
+                                ex_tp_list, ex_sl_list = await self.exchange.get_active_tp_sl(current_pos_sym)
+                                ex_sl = ex_sl_list[0] if ex_sl_list else 0.0
+                                ex_tp = ex_tp_list[0] if ex_tp_list else 0.0
+
+                                # Update SL if 0
+                                if db_sl == 0.0 and ex_sl > 0:
+                                    await update_trade_sl(t['message_id'], ex_sl)
+                                    logger.info(f"🎯 Synced Missing SL for {t['symbol']}: {ex_sl}")
+                                    await self.notifier.send(f"🎯 **Stop Loss Sync:** Detected SL for {t['symbol']} at {ex_sl}. Now tracking performance!")
+                                
+                                # Update TP if 0
+                                if db_tp == 0.0 and ex_tp > 0:
+                                    await update_trade_tp(t['message_id'], ex_tp)
+                                    logger.info(f"🎯 Synced Missing TP for {t['symbol']}: {ex_tp}")
                 except Exception as sync_loop_e:
                     logger.error(f"Sync Loop Error: {sync_loop_e}")
                 # ------------------------------------

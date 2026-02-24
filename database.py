@@ -131,6 +131,11 @@ async def update_trade_sl(message_id, sl_price):
         await db.execute('UPDATE trades SET sl_price = ? WHERE message_id = ?', (sl_price, message_id))
         await db.commit()
 
+async def update_trade_tp(message_id, tp_price):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute('UPDATE trades SET tp_price = ? WHERE message_id = ?', (tp_price, message_id))
+        await db.commit()
+
 async def close_trade_db(message_id, exit_price=0.0, pnl=0.0):
     from datetime import datetime, timezone, timedelta
     tz_wib = timezone(timedelta(hours=7))
