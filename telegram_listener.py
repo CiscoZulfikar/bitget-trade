@@ -779,6 +779,8 @@ class TelegramListener:
                                 sl_display = f" (SL: {sl_val})" if sl_val > 0 else " (No SL)"
                                 logger.info(f"Detected Manual Trade {norm_pos}{sl_display}. Added to DB with ID {dummy_id}.")
                                 await self.notifier.send(f"🕵️ **Manual Trade Detected:** {norm_pos} ({side} x{leverage})\nBot is now tracking this position. You can manage it via chat!{sl_display}")
+                            except Exception as e:
+                                logger.error(f"Error in manual trade detection: {e}")
                             
                             # Add to db_symbols to prevent duplicate alerts
                             db_symbols.append(norm_pos)
