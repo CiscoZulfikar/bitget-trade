@@ -765,12 +765,20 @@ class TelegramListener:
                             side = pos_data.get('side', 'long').upper()
                             leverage = pos_data.get('leverage', 1)
                             
-                            # Add to Database so it tracks PnL and History natively
-                            await store_trade(dummy_id, "MANUAL", norm_pos, entry_px, 0.0, 0.0, "OPEN", trade_type="MANUAL")
-                            await update_trade_full(dummy_id, "MANUAL", norm_pos, entry_px, 0.0, 0.0, "OPEN", side, leverage, "Manual Trade")
-                            
-                            logger.info(f"Detected Manual Trade {norm_pos}. Added to DB with ID {dummy_id}.")
-                            await self.notifier.send(f"🕵️ **Manual Trade Detected:** {norm_pos} ({side} x{leverage})\nBot is now tracking this position. You can manage it via chat!")
+                            # --- 🕵️ AUTO-DETECT MANUAL TRADES ---
+                            try:
+                                # Fetch active SL/TP for this manual trade
+                                tp_list, sl_list = await self.exchange.get_active_tp_sl(pos_sym)
+                                sl_val = sl_list[0] if sl_list else 0.0
+                                tp_val = tp_list[0] if tp_list else 0.0
+                                
+                                # Add to Database so it tracks PnL and History natively
+                                await store_trade(dummy_id, "MANUAL", norm_pos, entry_px, sl_val, tp_val, "OPEN", trade_type="MANUAL")
+                                await update_trade_full(dummy_id, "MANUAL", norm_pos, entry_px, sl_val, tp_price=tp_val, status="OPEN", position_side=side, leverage=leverage, notes="Manual Trade")
+                                
+                                sl_display = f" (SL: {sl_val})" if sl_val > 0 else " (No SL)"
+                                logger.info(f"Detected Manual Trade {norm_pos}{sl_display}. Added to DB with ID {dummy_id}.")
+                                await self.notifier.send(f"🕵️ **Manual Trade Detected:** {norm_pos} ({side} x{leverage})\nBot is now tracking this position. You can manage it via chat!{sl_display}")
                             
                             # Add to db_symbols to prevent duplicate alerts
                             db_symbols.append(norm_pos)
