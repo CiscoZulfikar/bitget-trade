@@ -264,8 +264,10 @@ async def get_stats_report():
                 if risk == 0: continue
                 
                 r_value = 0.0
-                if direction == "LONG": r_value = (exit_px - entry) / risk
-                else: r_value = (entry - exit_px) / risk
+                if direction.upper() == "LONG": 
+                    r_value = (exit_px - entry) / risk
+                else: 
+                    r_value = (entry - exit_px) / risk
                 
                 if r_value > 20 or r_value < -20: r_value = 0
                 is_win = pnl > 0
@@ -323,7 +325,7 @@ async def get_monthly_stats(month, year):
 
                     risk = abs(entry - sl)
                     if risk == 0: continue
-                    r_value = (exit_px - entry) / risk if direction == "LONG" else (entry - exit_px) / risk
+                    r_value = (exit_px - entry) / risk if direction.upper() == "LONG" else (entry - exit_px) / risk
                     
                     if r_value > 20 or r_value < -20: r_value = 0
                     

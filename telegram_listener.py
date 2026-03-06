@@ -906,7 +906,11 @@ class TelegramListener:
                         exit_px = float(exit_p or 0)
                         if entry != sl and exit_px > 0:
                             risk = abs(entry - sl)
-                            direction = 1 if sl < entry else -1
+                            pos_side = t.get('position_side', '')
+                            if pos_side:
+                                direction = 1 if pos_side.upper() == "LONG" else -1
+                            else:
+                                direction = 1 if sl < entry else -1
                             r_val = (exit_px - entry) / risk * direction
                             r_display = f" | R: {r_val:.2f}"
                     except:
