@@ -845,6 +845,52 @@ class TelegramListener:
                                 if db_tp == 0.0 and ex_tp > 0:
                                     await update_trade_tp(t['message_id'], ex_tp)
                                     logger.info(f"🎯 Synced Missing TP for {t['symbol']}: {ex_tp}")
+
+                            # --- AUTO BREAK-EVEN at 0.5R ---
+                            db_entry = float(t.get('entry_price') or 0.0)
+                            db_sl = float(t.get('sl_price') or 0.0)
+                            
+                            # Only proceed if we have valid entry and original SL from DB
+                            if db_entry > 0 and db_sl > 0 and db_entry != db_sl:
+                                current_pos_sym = next((ps for ps, pd in current_positions.items() if pd == match_pos), t['symbol'])
+                                ex_tp_list, ex_sl_list = await self.exchange.get_active_tp_sl(current_pos_sym)
+                                current_ex_sl = ex_sl_list[0] if ex_sl_list else 0.0
+                                
+                                mark_price = float(match_pos.get('markPrice', 0.0))
+                                side = match_pos.get('side', '').lower()
+                                
+                                direction = 1 if side == 'long' else -1
+                                risk = abs(db_entry - db_sl)
+                                
+                                if mark_price > 0 and risk > 0:
+                                    current_r = ((mark_price - db_entry) / risk) * direction
+                                    
+                                    if current_r >= 0.5:
+                                        # Calculate BE price with small buffer (e.g., 0.13% to cover fees)
+                                        buffer_pct = 0.0013
+                                        be_price = db_entry * (1 + buffer_pct) if side == 'long' else db_entry * (1 - buffer_pct)
+                                        
+                                        # Check if current SL is NOT already at BE or better
+                                        needs_update = False
+                                        if current_ex_sl == 0.0:
+                                            needs_update = True
+                                        elif side == 'long' and current_ex_sl < be_price * 0.999: # 0.1% tolerance
+                                            needs_update = True
+                                        elif side == 'short' and current_ex_sl > be_price * 1.001:
+                                            needs_update = True
+                                            
+                                        if needs_update:
+                                            logger.info(f"🛡️ Auto-BE Triggered for {t['symbol']} at {current_r:.2f}R! Moving SL to {be_price}")
+                                            
+                                            # Update SL on exchange
+                                            result = await self.exchange.update_sl(current_pos_sym, be_price)
+                                            success = result[0] if isinstance(result, tuple) else result
+                                            
+                                            if success:
+                                                # Update DB with new SL (Optional: Might want to keep original for stats, but updating keeps it in sync)
+                                                await update_trade_sl(t['message_id'], be_price)
+                                                await self.notifier.send(f"🛡️ **Auto-BE Triggered!**\n{t['symbol']} reached {current_r:.2f}R. SL moved to entry ({be_price:.4f}).")
+
                 except Exception as sync_loop_e:
                     logger.error(f"Sync Loop Error: {sync_loop_e}")
                 # ------------------------------------
