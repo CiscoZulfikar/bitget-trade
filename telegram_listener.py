@@ -232,7 +232,7 @@ class TelegramListener:
         risk_multiplier_str = await get_setting("risk_multiplier", "1.0")
         global_multiplier = float(risk_multiplier_str)
 
-        position_size_usdt = self.risk_manager.calculate_position_size(balance, global_multiplier=global_multiplier)
+        position_size_usdt = self.risk_manager.calculate_position_size(balance)
         
         # Variable Risk Sizing
         risk_scalar = 1.0
@@ -468,17 +468,17 @@ class TelegramListener:
                         logger.info(f"📈 Dynamic Risk: Profit detected (${realized_pnl}). Risk RESET: {current_risk:.4f} -> {new_risk:.4f}")
                         await self.notifier.send(f"📈 **Performance Update:** Profit detected! Risk reset to 100%.")
                     elif realized_pnl < 0:
-                        # Loss: Reduce by 5% absolute
-                        new_risk = max(0.1, current_risk - 0.05)
+                        # Loss: Reduce by 10% absolute
+                        new_risk = max(0.1, current_risk - 0.10)
                         await update_setting("risk_multiplier", new_risk)
                         logger.info(f"📉 Dynamic Risk: Loss detected (${realized_pnl}). Risk reduced: {current_risk:.4f} -> {new_risk:.4f}")
-                        await self.notifier.send(f"📉 **Capital Protection:** Risk reduced by 5% (Current: {new_risk*100:.1f}%)")
+                        await self.notifier.send(f"📉 **Capital Protection:** Risk reduced by 10% (Current: {new_risk*100:.1f}%)")
                     elif abs(realized_pnl) < 0.25: # Assuming $0.25 is BE/Fee range
-                        # Break-Even: Reduce by 2.5% absolute
-                        new_risk = max(0.1, current_risk - 0.025)
+                        # Break-Even: Reduce by 5% absolute
+                        new_risk = max(0.1, current_risk - 0.05)
                         await update_setting("risk_multiplier", new_risk)
                         logger.info(f"📉 Dynamic Risk: BE detected (${realized_pnl}). Risk reduced: {current_risk:.4f} -> {new_risk:.4f}")
-                        await self.notifier.send(f"📉 **Capital Protection:** Risk reduced by 2.5% (Current: {new_risk*100:.1f}%)")
+                        await self.notifier.send(f"📉 **Capital Protection:** Risk reduced by 5% (Current: {new_risk*100:.1f}%)")
                 
                 current_price = await self.exchange.get_market_price(symbol)
                 display_price = final_price if final_price > 0 else current_price

@@ -9,7 +9,7 @@ class RiskManager:
         self.leverage_loss_cap = leverage_loss_cap
         self.max_leverage = max_leverage
 
-    def calculate_position_size(self, current_balance, global_multiplier=1.0):
+    def calculate_position_size(self, current_balance):
         """Calculates margin based on tiered balance structure."""
         if current_balance <= 20000:
             rate = 0.10
@@ -24,7 +24,7 @@ class RiskManager:
         else:
             rate = 0.05
             
-        return current_balance * rate * global_multiplier
+        return current_balance * rate
 
     def calculate_leverage(self, entry_price, sl_price, risk_scalar=1.0, global_multiplier=1.0):
         """
