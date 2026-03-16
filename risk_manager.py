@@ -9,7 +9,7 @@ class RiskManager:
         self.leverage_loss_cap = leverage_loss_cap
         self.max_leverage = max_leverage
 
-    def calculate_position_size(self, current_balance):
+    def calculate_position_size(self, current_balance, global_multiplier=1.0):
         """Calculates margin based on tiered balance structure."""
         if current_balance <= 20000:
             rate = 0.10
@@ -24,13 +24,14 @@ class RiskManager:
         else:
             rate = 0.05
             
-        return current_balance * rate
+        return current_balance * rate * global_multiplier
 
-    def calculate_leverage(self, entry_price, sl_price, risk_scalar=1.0):
+    def calculate_leverage(self, entry_price, sl_price, risk_scalar=1.0, global_multiplier=1.0):
         """
         Calculates leverage such that if SL is hit, loss is ~50% of MARGIN.
         Includes a 10% Safety Buffer on the SL distance to account for slippage.
         risk_scalar: 1.0 for full risk, 0.5 for half risk, etc.
+        global_multiplier: Scaling factor based on performance (e.g. 0.95 بعد a loss)
         """
         if entry_price == 0: return 1
         
@@ -40,7 +41,7 @@ class RiskManager:
         
         if safe_risk_pct == 0: return 1
 
-        target_loss_cap = self.leverage_loss_cap * risk_scalar
+        target_loss_cap = self.leverage_loss_cap * risk_scalar * global_multiplier
         leverage = target_loss_cap / safe_risk_pct
         
         leverage = math.floor(leverage)

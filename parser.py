@@ -57,6 +57,8 @@ Rules:
 8. If "Market is slow", "Don't want to risk", "Closing early", "Took profit", "Took TP1", "TP1 Hit", "Profits secured", action is CLOSE_FULL.
 9. "TARGET", "T1/T2/T3", "OBJECTIVE" refer to TP. "INVALIDATION", "STOP", "STOPLOSS" refer to SL.
 10. Handle loose formatting.
+11. If the message contains words like "idea", "observation", "watching", or "opinion" without a clear "Entry" or "SL" intent, categorize as IGNORE.
+12. If a message mentions both "1R" (or profit booking) and "SL to entry" (or BE), prioritize MOVE_SL. Do NOT return BOOK_R or CLOSE_FULL if MOVE_SL is requested in the same message.
 """
 
 async def parse_message(message_text, reply_context=""):

@@ -5,7 +5,7 @@ from config import TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_CHANNEL_ID, NOTI
 from parser import parse_message
 from risk_manager import RiskManager
 from exchange_handler import ExchangeHandler
-from database import store_trade, get_trade_by_msg_id, update_trade_order_id, update_trade_sl, close_trade_db, get_open_trade_count, get_all_open_trades, get_recent_trades, reserve_trade, update_trade_full, get_stats_report, get_monthly_stats, clear_all_trades, update_trade_entry, update_trade_tp
+from database import store_trade, get_trade_by_msg_id, update_trade_order_id, update_trade_sl, close_trade_db, get_open_trade_count, get_all_open_trades, get_recent_trades, reserve_trade, update_trade_full, get_stats_report, get_monthly_stats, clear_all_trades, update_trade_entry, update_trade_tp, get_setting, update_setting
 from notifier import Notifier
 
 logger = logging.getLogger(__name__)
@@ -115,6 +115,11 @@ class TelegramListener:
         log_prefix = "[MOCK] " if is_mock else ""
         logger.info(f"{log_prefix}Processing message {msg_id} (Edit: {is_edit}): {text[:50]}...")
 
+        # Safety Check: Ignore "ideas"
+        if "IDEA" in text.upper():
+            logger.info(f"Skipping potential 'idea' signal {msg_id}: {text[:30]}...")
+            return
+
         # Parse
         data = await parse_message(text, reply_context)
         data['raw_message'] = text # Inject raw text for advanced processing
@@ -223,7 +228,11 @@ class TelegramListener:
                  await self.notifier.send("⚠️ Error: Could not fetch wallet balance.")
                  return
 
-        position_size_usdt = self.risk_manager.calculate_position_size(balance)
+        # Fetch Global Risk Multiplier
+        risk_multiplier_str = await get_setting("risk_multiplier", "1.0")
+        global_multiplier = float(risk_multiplier_str)
+
+        position_size_usdt = self.risk_manager.calculate_position_size(balance, global_multiplier=global_multiplier)
         
         # Variable Risk Sizing
         risk_scalar = 1.0
@@ -232,7 +241,7 @@ class TelegramListener:
              risk_scalar = 0.5
              logger.info(f"📉 Half Risk detected (0.5R). Scaling leverage/risk by 50%.")
 
-        leverage = self.risk_manager.calculate_leverage(exec_price, sl_price, risk_scalar=risk_scalar)
+        leverage = self.risk_manager.calculate_leverage(exec_price, sl_price, risk_scalar=risk_scalar, global_multiplier=global_multiplier)
         
         # Place Order
         if is_mock:
@@ -447,6 +456,30 @@ class TelegramListener:
                 # Use message_id gracefully (ignores if -1 dummy ID)
                 await close_trade_db(trade['message_id'], exit_price=final_price, pnl=realized_pnl)
                 
+                # Dynamic Risk Adjustment
+                if trade['message_id'] != -1: # Skip for temporary exchange context
+                    risk_multiplier_str = await get_setting("risk_multiplier", "1.0")
+                    current_risk = float(risk_multiplier_str)
+                    
+                    if realized_pnl > 0:
+                        # Profit: Full Reset
+                        new_risk = 1.0
+                        await update_setting("risk_multiplier", new_risk)
+                        logger.info(f"📈 Dynamic Risk: Profit detected (${realized_pnl}). Risk RESET: {current_risk:.4f} -> {new_risk:.4f}")
+                        await self.notifier.send(f"📈 **Performance Update:** Profit detected! Risk reset to 100%.")
+                    elif realized_pnl < 0:
+                        # Loss: Reduce by 5% absolute
+                        new_risk = max(0.1, current_risk - 0.05)
+                        await update_setting("risk_multiplier", new_risk)
+                        logger.info(f"📉 Dynamic Risk: Loss detected (${realized_pnl}). Risk reduced: {current_risk:.4f} -> {new_risk:.4f}")
+                        await self.notifier.send(f"📉 **Capital Protection:** Risk reduced by 5% (Current: {new_risk*100:.1f}%)")
+                    elif abs(realized_pnl) < 0.25: # Assuming $0.25 is BE/Fee range
+                        # Break-Even: Reduce by 2.5% absolute
+                        new_risk = max(0.1, current_risk - 0.025)
+                        await update_setting("risk_multiplier", new_risk)
+                        logger.info(f"📉 Dynamic Risk: BE detected (${realized_pnl}). Risk reduced: {current_risk:.4f} -> {new_risk:.4f}")
+                        await self.notifier.send(f"📉 **Capital Protection:** Risk reduced by 2.5% (Current: {new_risk*100:.1f}%)")
+                
                 current_price = await self.exchange.get_market_price(symbol)
                 display_price = final_price if final_price > 0 else current_price
                 
@@ -497,20 +530,24 @@ class TelegramListener:
     # --- New Features ---
 
     async def send_help(self):
-        help_text = (
-            "🤖 **Bot Commands**\n\n"
-            "• `HELP`: Show this message.\n"
-            "• `STATUS`: Show Equity, Free Balance & Open Trades.\n"
-            "• `CURRENT_TRADE`: List all open positions.\n"
-            "• `MARKET`: Show Top 8 Crypto + Gold/Silver Prices.\n"
-            "• `DATABASE`: Show Last 20 Real Trades.\n"
+        msg = (
+            "🤖 **Trading Bot Commands**\n\n"
+            "**/status** - System status, Equity & Risk Level\n"
+            "**/trades** - Open positions details & active TP/SL\n"
+            "**/database** - Last 10 trade entries from history\n"
+            "**/performance** - Win Rate & R-Ratio Dashboard\n"
+            "**/performance [Month] [Year]** - Monthly stats lookup\n"
+            "**/fixhistory** - Sync historical entry prices with exchange\n"
+            "**/cleardb** - Wipe all trade history (Careful!)\n"
+            "**/market** - BTC & Top 8 Crypto Price Check\n"
+            "**/help** - Show this menu\n"
             "\n"
             "**Signals (DM Me):**\n"
             "• `LONG BTC ENTRY ...` -> **Real Trade**\n"
-            "• `MOCK LONG BTC ENTRY ...` -> **Simulation Only**\n"
+            "• `MOCK LONG BTC ENTRY ...` -> **Simulation**\n"
             "• `LIMIT SHORT ETH ENTRY 3000 SL 3100`"
         )
-        await self.notifier.send(help_text)
+        await self.notifier.send(msg)
 
     async def send_status(self):
         try:
@@ -522,12 +559,17 @@ class TelegramListener:
             real_positions = await self.exchange.get_all_positions()
             count = len(real_positions)
             
+            # Fetch Global Risk Multiplier for Status
+            risk_mult = await get_setting("risk_multiplier", "1.0")
+            risk_pct = float(risk_mult) * 100
+
             await self.notifier.send(
                 f"📊 **System Status**\n\n"
                 f"💎 **Equity:** ${equity:.2f}\n"
                 f"💵 **Free:** ${free:.2f}\n"
-                f"📉 **Open Trades:** {count}/3\n\n"
-                f"💡 _Send `HELP` for command list._"
+                f"📉 **Open Trades:** {count}/3\n"
+                f"🛡️ **Risk Level:** {risk_pct:.1f}%\n\n"
+                f"💡 Send `HELP` for command list."
             )
         except Exception as e:
             await self.notifier.send(f"⚠️ Could not fetch status: {e}")
@@ -600,16 +642,21 @@ class TelegramListener:
                 # 2. Periodic Status Update
                 should_send = False
                 
-                if minute == 0:
-                    should_send = True
-                elif minute == 30:
-                    # check real positions
-                    positions = await self.exchange.get_all_positions()
-                    if len(positions) > 0:
+                # Check for active positions to determine frequency
+                positions = await self.exchange.get_all_positions()
+                has_active_trades = len(positions) > 0
+                
+                if has_active_trades:
+                    # Active: Every 15 minutes (0, 15, 30, 45)
+                    if minute % 15 == 0:
+                        should_send = True
+                else:
+                    # Idle: Every 4 hours (0, 4, 8, 12, 16, 20)
+                    if now_wib.hour % 4 == 0 and minute == 0:
                         should_send = True
                 
                 if should_send:
-                    logger.info("Sending scheduled status update...")
+                    logger.info(f"Sending scheduled status update (Active Trades: {has_active_trades})...")
                     await self.send_status()
                     # Sleep to avoid double send within the same minute
                     await asyncio.sleep(60) 
@@ -837,9 +884,10 @@ class TelegramListener:
 
                                 # Update SL if 0
                                 if db_sl == 0.0 and ex_sl > 0:
-                                    await update_trade_sl(t['message_id'], ex_sl)
-                                    logger.info(f"🎯 Synced Missing SL for {t['symbol']}: {ex_sl}")
-                                    await self.notifier.send(f"🎯 **Stop Loss Sync:** Detected SL for {t['symbol']} at {ex_sl}. Now tracking performance!")
+                                    # Disabled update_trade_sl to keep original SL for R calculation
+                                    # await update_trade_sl(t['message_id'], ex_sl)
+                                    logger.info(f"🎯 Synced Missing SL for {t['symbol']}: {ex_sl} (DB Sl remained 0 for R calc)")
+                                    # await self.notifier.send(f"🎯 **Stop Loss Sync:** Detected SL for {t['symbol']} at {ex_sl}. Now tracking performance!")
                                 
                                 # Update TP if 0
                                 if db_tp == 0.0 and ex_tp > 0:
@@ -887,8 +935,8 @@ class TelegramListener:
                                             success = result[0] if isinstance(result, tuple) else result
                                             
                                             if success:
-                                                # Update DB with new SL (Optional: Might want to keep original for stats, but updating keeps it in sync)
-                                                await update_trade_sl(t['message_id'], be_price)
+                                                # Update SL on exchange only. Do NOT update DB to keep original R calculation correct.
+                                                # await update_trade_sl(t['message_id'], be_price)
                                                 await self.notifier.send(f"🛡️ **Auto-BE Triggered!**\n{t['symbol']} reached {current_r:.2f}R. SL moved to entry ({be_price:.4f}).")
 
                 except Exception as sync_loop_e:
@@ -901,15 +949,15 @@ class TelegramListener:
             await asyncio.sleep(60) # Poll every 60s
 
     async def send_database_records(self):
-        """Sends the last 20 trades from the database."""
+        """Sends the last 10 trades from the database."""
         try:
-            trades = await get_recent_trades(20)
+            trades = await get_recent_trades(10)
             
             if not trades:
                 await self.notifier.send("📭 Database is empty.")
                 return
             
-            msg = "📚 **Trade History (Last 20)**\n\n"
+            msg = "📚 **Trade History (Last 10)**\n\n"
             
             for t in trades:
                 # Format Timestamps
@@ -1141,18 +1189,4 @@ class TelegramListener:
         except Exception as e:
              await self.notifier.send(f"⚠️ History Fix Failed: {e}")
 
-    async def send_help(self):
-        msg = (
-            "🤖 **Trading Bot Commands**\n\n"
-            "**/status** - System status & PnL\n"
-            "**/trades** - Open positions details\n"
-            "**/database** - Last 20 trade entries\n"
-            "**/performance** - Win Rate & R Dashboard\n"
-            "**/performance [Month] [Year]** - Specific month stats\n"
-            "**/fixhistory** - Sync historical entry prices\n"
-            "**/cleardb** - Wipe all trade history\n"
-            "**/market** - BTC Price Check\n"
-            "**/help** - Show this menu\n"
-        )
-        await self.notifier.send(msg)
 

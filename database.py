@@ -38,6 +38,16 @@ async def init_db():
         except: pass
         try: await db.execute('ALTER TABLE trades ADD COLUMN trade_type TEXT DEFAULT "AUTO"')
         except: pass
+        
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        ''')
+        # Default Risk Multiplier
+        await db.execute('INSERT OR IGNORE INTO settings (key, value) VALUES ("risk_multiplier", "1.0")')
+        
         await db.commit()
     logger.info("Database initialized.")
 
@@ -340,3 +350,14 @@ async def clear_all_trades():
         await db.execute('DELETE FROM trades')
         await db.commit()
     return True
+
+async def get_setting(key, default=None):
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute('SELECT value FROM settings WHERE key = ?', (key,)) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else default
+
+async def update_setting(key, value):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, str(value)))
+        await db.commit()
