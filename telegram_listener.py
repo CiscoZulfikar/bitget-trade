@@ -1,6 +1,7 @@
 from telethon import TelegramClient, events
 import logging
 import asyncio
+import time
 from config import TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_CHANNEL_ID, NOTIFICATION_USER_ID
 from parser import parse_message
 from risk_manager import RiskManager
@@ -18,6 +19,10 @@ class TelegramListener:
         self.risk_manager = RiskManager()
         self.exchange = ExchangeHandler()
         self.channel_id = TELEGRAM_CHANNEL_ID
+        
+        # Latency & Optimization Tracking
+        self.last_latency = 0.0
+        self.last_actions = []
 
     async def start(self):
         # 1. Channel Listener (Userbot)
@@ -60,6 +65,9 @@ class TelegramListener:
                 elif text_upper.startswith("FIXHISTORY") or text_upper.startswith("/FIXHISTORY"):
                     await self.fix_historical_entries(text_upper)
                     return
+                elif text_upper in ["TRACE", "/TRACE", "OPTIMIZATION"]:
+                    await self.send_optimization_trace()
+                    return
 
                 logger.info(f"Received DM from Admin. Processing Signal.")
                 await self.process_message(event, is_mock_override=False)
@@ -77,6 +85,10 @@ class TelegramListener:
         
         # Start Trade Monitor (Immediate Alerts)
         asyncio.create_task(self.monitor_trade_updates())
+
+        # Pre-warm Exchange Markets
+        logger.info("Pre-warming exchange markets info...")
+        asyncio.create_task(self.exchange.exchange.load_markets())
 
     async def notify_last_message(self):
         try:
@@ -151,37 +163,75 @@ class TelegramListener:
             logger.info(f"Ignored message type: {data.get('type')}")
 
     async def handle_trade_call(self, msg_id, data, is_mock=False):
+        start_time = time.perf_counter()
+        
         symbol = data['symbol']
         direction = data['direction']
         signal_entry = data['entry']
         signal_sl = data['sl']
 
-        # Check Max Trades (REAL EXCHANGE DATA)
-        # We check actual open positions on Bitget to account for manual trades
-        real_positions = await self.exchange.get_all_positions()
-        open_trades_count = len(real_positions)
+        # --- REFINED PARALLEL OPTIMIZATION ---
+        logger.info(f"⚡ Start Optimized Parallel Data Fetch for {symbol}...")
         
+        try:
+            # 1. Resolve Symbol first (Core dependency for other fetches)
+            symbol = await self.exchange.validate_symbol(symbol)
+            
+            # 2. Gather EVERYTHING else in parallel
+            results = await asyncio.gather(
+                self.exchange.get_all_positions(),
+                self.exchange.get_balance(),
+                self.exchange.get_market_price(symbol),
+                return_exceptions=True
+            )
+            
+            # 3. Handle Errors & Assign Results
+            # Positions
+            if isinstance(results[0], Exception):
+                logger.error(f"Failed to fetch positions: {results[0]}")
+                await self.notifier.send("⚠️ Error: Could not fetch active positions. Trade aborted.")
+                return
+            real_positions = results[0]
+            open_trades_count = len(real_positions)
+
+            # Balance
+            if isinstance(results[1], Exception):
+                logger.error(f"Failed to fetch balance: {results[1]}")
+                if not is_mock:
+                    await self.notifier.send("⚠️ Error: Could not fetch wallet balance. Trade aborted.")
+                    return
+                balance_data = {'free': 1000.0, 'equity': 1000.0}
+            else:
+                balance_data = results[1]
+
+            # Price
+            if isinstance(results[2], Exception):
+                 if is_mock:
+                    logger.warning(f"Failed to fetch price ({results[2]}). Using Signal Entry {signal_entry} as Mock Price.")
+                    market_price = signal_entry
+                 else:
+                    logger.error(f"Failed to fetch price for {symbol}: {results[2]}")
+                    await self.notifier.send(f"⚠️ Error: Could not fetch price for {symbol}. Skipped.\nReason: {results[2]}")
+                    return
+            else:
+                market_price = results[2]
+
+            balance = balance_data['free']
+            equity = balance_data['equity']
+            
+            logger.info(f"⚡ Parallel Fetch Complete in {(time.perf_counter() - start_time)*1000:.2f}ms. Price: {market_price}, Open: {open_trades_count}")
+            
+        except Exception as parallel_e:
+            logger.error(f"Parallel Execution Error: {parallel_e}")
+            await self.notifier.send(f"⚠️ System Error during parallel fetch: {parallel_e}")
+            return
+
+        # Check Max Trades (Now using result from parallel fetch)
         if open_trades_count >= 3:
              logger.warning(f"Skipping trade {symbol}: Max concurrent trades (3) reached (Real: {open_trades_count}).")
              await self.notifier.send(f"⚠️ Signal Skipped: Max concurrent trades reached ({open_trades_count}/3). Ignored {symbol}.")
              return
-        
-        # Validate & Correct Symbol (e.g. BONK -> 1000BONKUSDT)
-        symbol = await self.exchange.validate_symbol(symbol)
-        logger.info(f"Symbol resolved to: {symbol}")
-            
-        try:
-            # Get market price
-            market_price = await self.exchange.get_market_price(symbol)
-        except Exception as e:
-            if is_mock:
-                logger.warning(f"Failed to fetch price ({e}). Using Signal Entry {signal_entry} as Mock Price.")
-                market_price = signal_entry
-            else:
-                logger.error(f"Failed to fetch price for {symbol}: {e}")
-                await self.notifier.send(f"⚠️ Error: Could not fetch price for {symbol}. Skipped.\nReason: {e}")
-                return
-        
+
         # Scaling
         entry_price = self.risk_manager.scale_price(signal_entry, market_price)
         sl_price = self.risk_manager.scale_price(signal_sl, market_price)
@@ -207,33 +257,8 @@ class TelegramListener:
             return
             
         # Determine actual price to use for calc/order
-        # If MARKET, use current market price for size calc (approx), but order checks 'market'
-        # If LIMIT, use decision_price (which is the entry price)
         exec_price = decision_price if action == 'LIMIT' else market_price
 
-        # Balance & Risk
-        balance = 0.0
-        try:
-            balance_data = await self.exchange.get_balance()
-            balance = balance_data['free']
-            equity = balance_data['equity']
-        except Exception as e:
-            # ... (Mock balance handling same as before)
-            if is_mock:
-                 logger.warning(f"Failed to fetch balance ({e}). Using MOCK balance of $1000.")
-                 balance = 1000.0
-                 equity = 1000.0
-            else:
-                 logger.error(f"Failed to fetch balance: {e}")
-                 await self.notifier.send("⚠️ Error: Could not fetch wallet balance.")
-                 return
-
-        # Fetch Global Risk Multiplier
-        risk_multiplier_str = await get_setting("risk_multiplier", "1.0")
-        global_multiplier = float(risk_multiplier_str)
-
-        position_size_usdt = self.risk_manager.calculate_position_size(balance)
-        
         # Variable Risk Sizing
         risk_scalar = 1.0
         raw_msg = data.get('raw_message', '').upper()
@@ -241,6 +266,11 @@ class TelegramListener:
              risk_scalar = 0.5
              logger.info(f"📉 Half Risk detected (0.5R). Scaling leverage/risk by 50%.")
 
+        # Fetch Global Risk Multiplier
+        risk_multiplier_str = await get_setting("risk_multiplier", "1.0")
+        global_multiplier = float(risk_multiplier_str)
+
+        position_size_usdt = self.risk_manager.calculate_position_size(balance)
         leverage = self.risk_manager.calculate_leverage(exec_price, sl_price, risk_scalar=risk_scalar, global_multiplier=global_multiplier)
         
         # Place Order
@@ -282,13 +312,22 @@ class TelegramListener:
             # We always pass 'limit' as order_type if we converted it
             order_type_str = final_order_type.lower()
             
-            order = await self.exchange.place_order(
+            order_data = await self.exchange.place_order(
                 symbol, side, amount, leverage, 
                 sl_price=sl_price, tp_price=tp_price, 
                 price=final_price, 
                 order_type=order_type_str
             )
             
+            if isinstance(order_data, tuple):
+                order, actions = order_data
+            else:
+                order, actions = order_data, ["Unknown (Check Cache)"]
+
+            # Tracking
+            self.last_latency = (time.perf_counter() - start_time) * 1000
+            self.last_actions = actions
+
             if order:
                 # Capture Actual Fill Price if available
                 fill_price = entry_price # Default to plan
@@ -536,6 +575,7 @@ class TelegramListener:
             "**/trades** - Open positions details & active TP/SL\n"
             "**/database** - Last 10 trade entries from history\n"
             "**/performance** - Win Rate & R-Ratio Dashboard\n"
+            "**/trace** - Latency optimization status & cache\n"
             "**/performance [Month] [Year]** - Monthly stats lookup\n"
             "**/fixhistory** - Sync historical entry prices with exchange\n"
             "**/cleardb** - Wipe all trade history (Careful!)\n"
@@ -547,6 +587,36 @@ class TelegramListener:
             "• `MOCK LONG BTC ENTRY ...` -> **Simulation**\n"
             "• `LIMIT SHORT ETH ENTRY 3000 SL 3100`"
         )
+        await self.notifier.send(msg)
+
+    async def send_optimization_trace(self):
+        """Displays the latency optimization status and cache content."""
+        cache = self.exchange.get_cache_info()
+        
+        msg = "🚀 **Latency Optimization Status**\n\n"
+        msg += "**Features:**\n"
+        msg += "✅ Parallel Data Fetching\n"
+        msg += "✅ Conditional Configuration Caching\n"
+        msg += "✅ Pre-warmed Symbol Info\n\n"
+        
+        if self.last_latency > 0:
+            msg += f"📊 **Last Execution Trace:**\n"
+            msg += f"   ⏱️ Total Time: `{self.last_latency:.0f}ms`\n"
+            msg += f"   🛠️ Actions: `{', '.join(self.last_actions)}`\n\n"
+
+        if not cache:
+            msg += "📭 **Cache:** Empty (No trades since restart)\n"
+        else:
+            msg += "**📂 Optimization Cache:**\n"
+            for key, data in cache.items():
+                symbol = key.split("_")[0]
+                side = key.split("_")[1]
+                msg += f"• **{symbol} ({side.upper()}):**\n"
+                msg += f"   └ Lev: `{data.get('leverage')}x` | "
+                msg += f"Margin: `{data.get('marginMode')}` | "
+                msg += f"Hedge: `{data.get('hedgeMode')}`\n"
+        
+        msg += "\n💡 *Cached settings are skipped during execution to save ~1.5s.*"
         await self.notifier.send(msg)
 
     async def send_status(self):

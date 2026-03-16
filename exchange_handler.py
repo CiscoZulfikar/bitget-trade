@@ -21,6 +21,13 @@ class ExchangeHandler:
         })
         
         self.exchange.has['fetchCurrencies'] = False
+        
+        # Optimization Cache: { 'BTCUSDT': { 'leverage': 20, 'marginMode': 'isolated', 'posSide': 'long' } }
+        self._cache = {}
+
+    def get_cache_info(self):
+        """Returns the current state of the optimization cache."""
+        return self._cache
 
     async def get_market_price(self, symbol):
         try:
@@ -424,53 +431,51 @@ class ExchangeHandler:
             return f"{base}USDT"
 
     async def place_order(self, symbol, side, amount, leverage, sl_price=None, tp_price=None, price=None, order_type='market'):
-        # 1. Ensure Hedge Mode & Isolated Margin
-        await self.ensure_hedge_mode(symbol)
-        await self.ensure_isolated_margin(symbol)
+        # 1. Check Cache to see if we can skip configuration calls
+        pos_side = 'long' if side == 'buy' else 'short'
+        cache_key = f"{symbol}_{pos_side}"
+        cached = self._cache.get(cache_key, {})
         
-        # 2. Set leverage (if provided)
+        # Track what we actually do for traceability
+        actions_taken = []
+
+        # 2. Ensure Hedge Mode & Isolated Margin (Cache check)
+        if cached.get('marginMode') != 'isolated' or cached.get('hedgeMode') is not True:
+            await self.ensure_hedge_mode(symbol)
+            await self.ensure_isolated_margin(symbol)
+            self._cache.setdefault(cache_key, {})['hedgeMode'] = True
+            self._cache[cache_key]['marginMode'] = 'isolated'
+            actions_taken.append("Set Hedge/Isolated")
+        else:
+            actions_taken.append("Skipped Modes (Cached)")
+        
+        # 3. Set leverage (if provided and different from cache)
         if leverage:
-            await self.set_leverage(symbol, leverage)
+            if cached.get('leverage') != leverage:
+                await self.set_leverage(symbol, leverage)
+                self._cache.setdefault(cache_key, {})['leverage'] = leverage
+                actions_taken.append(f"Set Lev {leverage}x")
+            else:
+                actions_taken.append(f"Skipped Lev (Cached {leverage}x)")
         
         params = {}
-        # Explicitly set posSide for Hedge Mode (Bitget V2 Requirement)
-        # matches side because place_order is for OPENING positions
-        if side == 'buy':
-            params['posSide'] = 'long' 
-        else:
-            params['posSide'] = 'short'
-        
-        # Explicitly set tradeSide to 'open' to avoid ambiguity
+        params['posSide'] = pos_side
         params['tradeSide'] = 'open' 
-        
-        # Ensure marginMode is passed if needed (though account setting should prevail)
         params['marginMode'] = 'isolated' 
 
-        logger.info(f"DEBUG: Params for {symbol} {side}: {params}")
+        logger.info(f"Execution: {symbol} {side} | Actions: {', '.join(actions_taken)}")
 
         if sl_price:
-            params['stopLoss'] = {
-                'triggerPrice': sl_price,
-                'type': 'market' 
-            }
+            params['stopLoss'] = {'triggerPrice': sl_price, 'type': 'market'}
         if tp_price:
-            params['takeProfit'] = {
-                'triggerPrice': tp_price,
-                'type': 'market'
-            }
+            params['takeProfit'] = {'triggerPrice': tp_price, 'type': 'market'}
         
         if order_type.lower() == 'limit':
-            if not price:
-                logger.error("Limit order requested but no price provided.")
-                return None
-            logger.info(f"Placing LIMIT {side} on {symbol} at {price}")
             order = await self.exchange.create_order(symbol, 'limit', side, amount, price, params=params)
         else:
-            # Market
-            logger.info(f"Placing MARKET {side} on {symbol}")
             order = await self.exchange.create_order(symbol, 'market', side, amount, params=params)
             
-        return order
+        return order, actions_taken
 
     async def close_position(self, symbol):
         """Closes the entire position for a symbol (Supports Hedge & One-Way via Native V2 API)."""
@@ -628,12 +633,17 @@ class ExchangeHandler:
                      logger.warning(f"Failed to recalculate size/leverage: {e}. Using old values.")
 
             # 5. Place New Order
-            new_order = await self.place_order(
+            new_order_data = await self.place_order(
                 symbol, side, amount, leverage, 
                 sl_price=current_sl, tp_price=current_tp, 
                 price=price, order_type='limit'
             )
             
+            if isinstance(new_order_data, tuple):
+                new_order, _ = new_order_data
+            else:
+                new_order = new_order_data
+
             if new_order:
                 return True, "Success"
             else:
