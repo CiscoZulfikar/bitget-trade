@@ -108,6 +108,13 @@ async def update_trade_full(message_id, order_id, symbol, entry_price, sl_price,
         ''', (order_id, symbol, entry_price, sl_price, tp_price, status, position_side, leverage, notes, message_id))
         await db.commit()
 
+async def delete_trade(message_id):
+    """Remove a trade entry from the database (used for failed executions)."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute('DELETE FROM trades WHERE message_id = ?', (message_id,))
+        await db.commit()
+    logger.info(f"Deleted trade record for message {message_id}")
+
 async def get_trade_by_msg_id(message_id):
     """Retrieve trade details by Telegram message ID."""
     async with aiosqlite.connect(DB_NAME) as db:

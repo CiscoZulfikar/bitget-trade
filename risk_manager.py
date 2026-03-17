@@ -79,36 +79,35 @@ class RiskManager:
     def scale_price(self, signal_price, market_price):
         """
         Re-scales signal price to match market price decimal formatting and magnitude.
+        Uses ratio-based scaling to be stable across power-of-10 boundaries.
         Example: Signal 0.00378, Market 0.00000378 -> Returns 0.00000378
+        Example: Signal 91.2, Market 102.5 -> Returns 91.2 (Correctly handles boundary)
         """
-        if signal_price == 0 or market_price == 0:
+        if signal_price == 0 or market_price <= 0:
             return signal_price
 
-        signal_oom = math.floor(math.log10(signal_price))
-        market_oom = math.floor(math.log10(market_price))
-        
-        diff_oom = signal_oom - market_oom
+        # Calculate how many factors of 10 different they are
+        # round() is more stable than floor() near boundaries (e.g. 99.9 vs 100.1)
+        ratio = signal_price / market_price
+        diff_oom = round(math.log10(ratio))
         
         if diff_oom != 0:
             scale_factor = 10 ** diff_oom
-            logger.info(f"detected magnitude diff: {diff_oom}. Scaling...")
+            corrected_price = signal_price / scale_factor
             
-            # If signal is bigger (e.g. -3 vs -6, diff=3), we divide
-            if diff_oom > 0:
-                corrected_price = signal_price / (10 ** diff_oom)
-            else:
-                corrected_price = signal_price * (10 ** abs(diff_oom))
-
-            # Double check within 10x range
+            logger.info(f"Scaled price from {signal_price} to {corrected_price} (Factor: 10^{diff_oom})")
+            
+            # Double check within 10x range of market price
             if not (market_price / 10 <= corrected_price <= market_price * 10):
-                 # Fallback heuristic if simple log10 didn't land it close enough (e.g. 0.9 vs 0.0009)
+                logger.warning(f"Scaling result {corrected_price} far from market {market_price}. Using fallback.")
+                # Fallback: manually shift decimal until in range
                 corrected_price = signal_price
                 while corrected_price > market_price * 5:
                     corrected_price /= 10
                 while corrected_price < market_price / 5:
                     corrected_price *= 10
-            
-            logger.info(f"Scaled price from {signal_price} to {corrected_price}")
+                return corrected_price
+
             return corrected_price
             
         return signal_price

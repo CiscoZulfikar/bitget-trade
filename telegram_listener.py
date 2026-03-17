@@ -6,7 +6,7 @@ from config import TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_CHANNEL_ID, NOTI
 from parser import parse_message
 from risk_manager import RiskManager
 from exchange_handler import ExchangeHandler
-from database import store_trade, get_trade_by_msg_id, update_trade_order_id, update_trade_sl, close_trade_db, get_open_trade_count, get_all_open_trades, get_recent_trades, reserve_trade, update_trade_full, get_stats_report, get_monthly_stats, clear_all_trades, update_trade_entry, update_trade_tp, get_setting, update_setting
+from database import store_trade, get_trade_by_msg_id, update_trade_order_id, update_trade_sl, close_trade_db, get_open_trade_count, get_all_open_trades, get_recent_trades, reserve_trade, update_trade_full, get_stats_report, get_monthly_stats, clear_all_trades, update_trade_entry, update_trade_tp, get_setting, update_setting, delete_trade
 from notifier import Notifier
 
 logger = logging.getLogger(__name__)
@@ -137,25 +137,37 @@ class TelegramListener:
         data['raw_message'] = text # Inject raw text for advanced processing
         
         if data['type'] == 'TRADE_CALL':
-            # Check DB to allow edits ONLY if we haven't processed this msg_id yet
-            # Determine symbol from data to store in reserve
-            symbol = data.get('symbol', 'UNKNOWN')
+            # 1. VALIDATE SYMBOL FIRST (So we reserve the correct normalized name)
+            raw_symbol = data.get('symbol', 'UNKNOWN')
+            symbol = await self.exchange.validate_symbol(raw_symbol)
+            data['symbol'] = symbol # Update data with normalized symbol
             
-            # ATTEMPT TO RESERVE TRADE ID FIRST (Prevents Race Conditions)
+            # 2. ATTEMPT TO RESERVE TRADE ID (Prevents Race Conditions)
             is_reserved = await reserve_trade(msg_id, symbol)
             
             if not is_reserved:
-                # Could be a duplicate OR an edit to an existing trade.
-                # If existing, check if we should allow edit (not implemented complex logic yet), 
-                # but generally we ignore duplicates to prevent double execution.
                 logger.info(f"Ignored duplicate/edited TRADE_CALL {msg_id} (Already processed/reserved).")
             else:
                 try:
-                    await self.handle_trade_call(msg_id, data, is_mock)
+                    # 3. Handle Trade (Pass normalized symbol and is_mock)
+                    # Use a try block to handle deletion on failure
+                    execution_started = False
+                    try:
+                        execution_started = await self.handle_trade_call(msg_id, data, is_mock)
+                    except Exception as handle_e:
+                        logger.error(f"Error handling trade call {msg_id}: {handle_e}")
+                        # If we never even opened it, delete the reservation
+                        await delete_trade(msg_id)
+                        await self.notifier.send(f"⚠️ Internal Error processing {symbol}: `{str(handle_e)}`")
+                    
+                    # 4. SAFETY: If handle_trade_call returned False (Aborted/Failed), cleanup DB
+                    if not execution_started:
+                        logger.info(f"Trade call {msg_id} for {symbol} did not result in execution. Cleaning up reservation.")
+                        await delete_trade(msg_id)
+
                 except Exception as e:
-                    logger.error(f"Error handling trade call {msg_id}: {e}")
-                    # Optional: Release reservation or mark as FAILED?
-                    # For now, it stays as PROCESSING which blocks retries, which is safer than double execution.
+                    logger.error(f"Critical error in process_message for {msg_id}: {e}")
+                    await delete_trade(msg_id)
 
         elif data['type'] == 'UPDATE':
             await self.handle_update(msg_id, data, reply_msg_id=reply_msg.id if reply_msg else None, is_mock=is_mock)
@@ -163,9 +175,10 @@ class TelegramListener:
             logger.info(f"Ignored message type: {data.get('type')}")
 
     async def handle_trade_call(self, msg_id, data, is_mock=False):
+        """Returns True if trade was opened or mocked successfully, False if aborted/failed."""
         start_time = time.perf_counter()
         
-        symbol = data['symbol']
+        symbol = data['symbol'] # Already validated in process_message
         direction = data['direction']
         signal_entry = data['entry']
         signal_sl = data['sl']
@@ -174,10 +187,7 @@ class TelegramListener:
         logger.info(f"⚡ Start Optimized Parallel Data Fetch for {symbol}...")
         
         try:
-            # 1. Resolve Symbol first (Core dependency for other fetches)
-            symbol = await self.exchange.validate_symbol(symbol)
-            
-            # 2. Gather EVERYTHING else in parallel
+            # 1. Gather EVERYTHING in parallel
             results = await asyncio.gather(
                 self.exchange.get_all_positions(),
                 self.exchange.get_balance(),
@@ -190,7 +200,7 @@ class TelegramListener:
             if isinstance(results[0], Exception):
                 logger.error(f"Failed to fetch positions: {results[0]}")
                 await self.notifier.send("⚠️ Error: Could not fetch active positions. Trade aborted.")
-                return
+                return False
             real_positions = results[0]
             open_trades_count = len(real_positions)
 
@@ -199,7 +209,7 @@ class TelegramListener:
                 logger.error(f"Failed to fetch balance: {results[1]}")
                 if not is_mock:
                     await self.notifier.send("⚠️ Error: Could not fetch wallet balance. Trade aborted.")
-                    return
+                    return False
                 balance_data = {'free': 1000.0, 'equity': 1000.0}
             else:
                 balance_data = results[1]
@@ -212,7 +222,7 @@ class TelegramListener:
                  else:
                     logger.error(f"Failed to fetch price for {symbol}: {results[2]}")
                     await self.notifier.send(f"⚠️ Error: Could not fetch price for {symbol}. Skipped.\nReason: {results[2]}")
-                    return
+                    return False
             else:
                 market_price = results[2]
 
@@ -224,13 +234,13 @@ class TelegramListener:
         except Exception as parallel_e:
             logger.error(f"Parallel Execution Error: {parallel_e}")
             await self.notifier.send(f"⚠️ System Error during parallel fetch: {parallel_e}")
-            return
+            return False
 
         # Check Max Trades (Now using result from parallel fetch)
         if open_trades_count >= 3:
              logger.warning(f"Skipping trade {symbol}: Max concurrent trades (3) reached (Real: {open_trades_count}).")
              await self.notifier.send(f"⚠️ Signal Skipped: Max concurrent trades reached ({open_trades_count}/3). Ignored {symbol}.")
-             return
+             return False
 
         # Scaling
         entry_price = self.risk_manager.scale_price(signal_entry, market_price)
@@ -254,7 +264,7 @@ class TelegramListener:
         
         if action == 'ABORT':
             await self.notifier.send(f"⚠️ Aborted {symbol}: {reason}")
-            return
+            return False
             
         # Determine actual price to use for calc/order
         exec_price = decision_price if action == 'LIMIT' else market_price
@@ -288,7 +298,7 @@ class TelegramListener:
             )
             # Storing allows testing updates. Let's store with status "MOCK"
             await update_trade_full(msg_id, "MOCK_ORDER_ID", symbol, entry_price, sl_price, tp_price=tp_price, status="MOCK")
-            return
+            return True
 
         amount = (position_size_usdt * leverage) / exec_price
         side = 'buy' if direction.upper() == 'LONG' else 'sell'
@@ -343,12 +353,15 @@ class TelegramListener:
                 
                 risk_note = f"\n**Risk:** {risk_scalar}R" if risk_scalar != 1.0 else ""
                 await self.notifier.send(f"🟢 {final_order_type} Order Opened: {symbol} at {fill_price} with {leverage}x.\n**TP:** {tp_display}\n**SL:** {sl_price}\n**Margin:** ${position_size_usdt:.2f}{risk_note}\nReason: {reason}")
+                return True
             else:
                 # Should not happen if place_order raises on error, but handled for safety
                 await self.notifier.send(f"⚠️ Execution failed for {symbol} (Unknown reason/None returned).")
+                return False
         except Exception as e:
             logger.error(f"Execution failed for {symbol}: {e}")
             await self.notifier.send(f"⚠️ Execution failed for {symbol}:\n`{str(e)}`")
+            return False
 
     # ... (Rest of monitor_trade_updates, handle_update etc. - unchanged) ...
 
@@ -374,8 +387,7 @@ class TelegramListener:
         
         trade = None
         if symbol:
-            symbol = symbol.replace("#", "").replace("$", "").upper()
-            if not symbol.endswith("USDT"): symbol += "USDT"
+            symbol = await self.exchange.validate_symbol(symbol)
 
         # 2. Try to find trade by Reply ID
         if reply_msg_id and not trade:
