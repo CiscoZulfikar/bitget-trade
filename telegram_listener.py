@@ -23,6 +23,9 @@ class TelegramListener:
         # Latency & Optimization Tracking
         self.last_latency = 0.0
         self.last_actions = []
+        
+        # Guard against duplicate closure notifications
+        self.processing_closures = set()
 
     async def start(self):
         # 1. Channel Listener (Userbot)
@@ -381,6 +384,31 @@ class TelegramListener:
         else:
             await self.notifier.send("⚠️ **Caution:** This will wipe all trade history.\nTo proceed, type: `/cleardb confirm`")
 
+    async def apply_capital_protection(self, realized_pnl):
+        """Adjusts global risk multiplier based on profit/loss."""
+        risk_multiplier_str = await get_setting("risk_multiplier", "1.0")
+        current_risk = float(risk_multiplier_str)
+        
+        if realized_pnl > 0:
+            # Profit: Full Reset
+            new_risk = 1.0
+            await update_setting("risk_multiplier", new_risk)
+            logger.info(f"📈 Dynamic Risk: Profit detected (${realized_pnl}). Risk RESET: {current_risk:.4f} -> {new_risk:.4f}")
+            await self.notifier.send(f"📈 **Performance Update:** Profit detected! Risk reset to 100%.")
+        elif realized_pnl < 0:
+            # Loss: Reduce by 10% absolute
+            new_risk = max(0.1, current_risk - 0.10)
+            await update_setting("risk_multiplier", new_risk)
+            logger.info(f"📉 Dynamic Risk: Loss detected (${realized_pnl}). Risk reduced: {current_risk:.4f} -> {new_risk:.4f}")
+            await self.notifier.send(f"📉 **Capital Protection:** Risk reduced by 10% (Current: {new_risk*100:.1f}%)")
+        elif abs(realized_pnl) < 0.25: # Assuming $0.25 is BE/Fee range
+            # Break-Even: Reduce by 5% absolute
+            new_risk = max(0.1, current_risk - 0.05)
+            await update_setting("risk_multiplier", new_risk)
+            logger.info(f"📉 Dynamic Risk: BE detected (${realized_pnl}). Risk reduced: {current_risk:.4f} -> {new_risk:.4f}")
+            await self.notifier.send(f"📉 **Capital Protection:** Risk reduced by 5% (Current: {new_risk*100:.1f}%)")
+
+
     async def handle_update(self, msg_id, data, reply_msg_id=None, is_mock=False):
         # 1. Try to get symbol from Parser (if specific coin mentioned)
         symbol = data.get('symbol')
@@ -505,31 +533,18 @@ class TelegramListener:
                     final_price = net_pnl_data['exit_price']
 
                 # Use message_id gracefully (ignores if -1 dummy ID)
-                await close_trade_db(trade['message_id'], exit_price=final_price, pnl=realized_pnl)
-                
-                # Dynamic Risk Adjustment
-                if trade['message_id'] != -1: # Skip for temporary exchange context
-                    risk_multiplier_str = await get_setting("risk_multiplier", "1.0")
-                    current_risk = float(risk_multiplier_str)
+                self.processing_closures.add(symbol)
+                try:
+                    await close_trade_db(trade['message_id'], exit_price=final_price, pnl=realized_pnl)
                     
-                    if realized_pnl > 0:
-                        # Profit: Full Reset
-                        new_risk = 1.0
-                        await update_setting("risk_multiplier", new_risk)
-                        logger.info(f"📈 Dynamic Risk: Profit detected (${realized_pnl}). Risk RESET: {current_risk:.4f} -> {new_risk:.4f}")
-                        await self.notifier.send(f"📈 **Performance Update:** Profit detected! Risk reset to 100%.")
-                    elif realized_pnl < 0:
-                        # Loss: Reduce by 10% absolute
-                        new_risk = max(0.1, current_risk - 0.10)
-                        await update_setting("risk_multiplier", new_risk)
-                        logger.info(f"📉 Dynamic Risk: Loss detected (${realized_pnl}). Risk reduced: {current_risk:.4f} -> {new_risk:.4f}")
-                        await self.notifier.send(f"📉 **Capital Protection:** Risk reduced by 10% (Current: {new_risk*100:.1f}%)")
-                    elif abs(realized_pnl) < 0.25: # Assuming $0.25 is BE/Fee range
-                        # Break-Even: Reduce by 5% absolute
-                        new_risk = max(0.1, current_risk - 0.05)
-                        await update_setting("risk_multiplier", new_risk)
-                        logger.info(f"📉 Dynamic Risk: BE detected (${realized_pnl}). Risk reduced: {current_risk:.4f} -> {new_risk:.4f}")
-                        await self.notifier.send(f"📉 **Capital Protection:** Risk reduced by 5% (Current: {new_risk*100:.1f}%)")
+                    # Dynamic Risk Adjustment
+                    if trade['message_id'] != -1: 
+                        await self.apply_capital_protection(realized_pnl)
+                finally:
+                    # Delay removal slightly to ensure monitor pulse catches it
+                    await asyncio.sleep(2)
+                    self.processing_closures.discard(symbol)
+
                 
                 current_price = await self.exchange.get_market_price(symbol)
                 display_price = final_price if final_price > 0 else current_price
@@ -733,8 +748,8 @@ class TelegramListener:
                     if minute % 15 == 0:
                         should_send = True
                 else:
-                    # Idle: Every 4 hours (0, 4, 8, 12, 16, 20)
-                    if now_wib.hour % 4 == 0 and minute == 0:
+                    # Idle: Every 4 hours (Starts at 07:00 -> 07, 11, 15, 19, 23, 03)
+                    if (now_wib.hour - 7) % 4 == 0 and minute == 0:
                         should_send = True
                 
                 if should_send:
@@ -819,7 +834,11 @@ class TelegramListener:
                 # Check for CLOSED positions (In last_positions but NOT in current_positions)
                 for symbol, old_pos in last_positions.items():
                     if symbol not in current_positions:
-                        # Position Closed!
+                        # POSITION CLOSED!
+                        if symbol in self.processing_closures:
+                            logger.info(f"Skipping monitor alert for {symbol} (Already processing via signal).")
+                            continue
+                        
                         logger.info(f"Detected closure for {symbol}. Fetching details...")
                         
                         # Fetch Last Trade to get PnL/Reason
@@ -852,6 +871,9 @@ class TelegramListener:
                                 f"{icon} **PnL:** ${pnl:.2f} ({reason})\n"
                                 f"📉 **Exit Price:** {price}\n"
                             )
+                            
+                            # Unified Protection (Apply to natural SL/TP hits too!)
+                            await self.apply_capital_protection(pnl)
                         else:
                             await self.notifier.send(f"🔔 **Position Closed: {symbol}** (Details unavailable)")
 

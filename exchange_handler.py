@@ -365,70 +365,63 @@ class ExchangeHandler:
         """
         try:
             # clean input
-            base = input_symbol.upper().replace("USDT", "").replace("$", "").replace("#", "")
+            input_clean = input_symbol.upper().replace("$", "").replace("#", "").strip()
+            if not input_clean.endswith("USDT") and not input_clean.endswith("USD"):
+                base = input_clean
+            else:
+                base = input_clean.replace("USDT", "").replace("USD", "")
+            
+            logger.info(f"🔎 Validating symbol for input: '{input_symbol}' (Base: '{base}')")
             
             # Common formats to try
             potential_symbols = [
                 f"{base}USDT",           # Standard: BTCUSDT
-                f"1000{base}USDT",       # Memecoins: 1000BONKUSDT, 1000PEPEUSDT
-                f"k{base}USDT",          # Kilo prefix: kBONKUSDT (less common but exists)
-                f"{base}USD"             # Inverse (unlikely for USDT margin but checking)
+                f"1000{base}USDT",       # Memecoins: 1000BONKUSDT, 10 PEPEUSDT
+                f"k{base}USDT",          # Kilo prefix
             ]
             
             # Ensure markets are loaded
             if not self.exchange.markets:
+                logger.info("📡 Loading exchange markets...")
                 await self.exchange.load_markets()
                 
             # Filter for USDT Futures (Linear Swap) ONLY
-            # We want to ignore Spot markets (e.g. BONK/USDT) so we find 1000BONK/USDT:USDT
             futures_markets = [
                 m for m in self.exchange.markets.values() 
                 if m.get('swap') and m.get('linear') and m.get('quote') == 'USDT'
             ]
             
-            # Map IDs and Symbols for easy lookup
-            # Key = ID (e.g. 1000BONKUSDT), Value = Market
             futures_map = {m['id']: m for m in futures_markets}
             
             for sym in potential_symbols:
                 # 1. Check strict ID match in Futures list
-                # Bitget IDs: 1000BONKUSDT, BTCUSDT
                 if sym in futures_map:
+                    logger.info(f"✅ Found exact match for '{sym}'")
                     return sym
                     
                 # 2. Check CCXT Symbol match (e.g. 1000BONK/USDT:USDT)
-                # Construct CCXT-style symbol from potential (e.g. 1000BONKUSDT -> 1000BONK/USDT:USDT)
-                # Base is sym - USDT
                 s_base = sym.replace("USDT", "")
                 ccxt_target = f"{s_base}/USDT:USDT"
                 
-                # Check if this constructed key exists in the loaded markets (and is a future)
                 if ccxt_target in self.exchange.markets:
                     m = self.exchange.markets[ccxt_target]
                     if m.get('swap') and m.get('linear'):
+                        logger.info(f"✅ Found CCXT match '{ccxt_target}' -> ID: '{m['id']}'")
                         return m['id']
-                
-                # 3. Fuzzy ID match (startswith)
-                for mid in futures_map.keys():
-                     if mid == sym: # Exact match already checked above, but safe to keep
-                         return mid
             
-            # If still no match, try searching the futures list for the base + 1000 prefix logic specifically
-            # e.g. input BONK -> check if 1000BONKUSDT exists in futures_map
-            if "1000" not in base:
-                 memecoin_sym = f"1000{base}USDT"
-                 if memecoin_sym in futures_map:
-                     return memecoin_sym
+            # 3. Last Ditch: Prefix search
+            # If input is TAO, search for anything containing TAO inside futures_map
+            for mid in futures_map.keys():
+                if base in mid and ("USDT" in mid or "USD" in mid):
+                    logger.info(f"✅ Found fuzzy match: '{mid}' for base '{base}'")
+                    return mid
             
-            # If no match found, standard fallback but it might be invalid if it's a spot symbol
-            return f"{base}USDT"
-                        
-            # If no match found, standard fallback
+            logger.warning(f"⚠️ Could not find a matching future for '{input_symbol}'. Falling back to original logic.")
             return f"{base}USDT"
             
         except Exception as e:
-            logger.error(f"Symbol validation failed for {input_symbol}: {e}")
-            return f"{base}USDT"
+            logger.error(f"❌ Symbol validation failed for {input_symbol}: {e}")
+            return f"{input_symbol.upper().replace('$', '').replace('#', '').strip()}USDT"
 
     async def place_order(self, symbol, side, amount, leverage, sl_price=None, tp_price=None, price=None, order_type='market'):
         # 1. Check Cache to see if we can skip configuration calls
