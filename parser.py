@@ -54,7 +54,7 @@ Rules:
 5. If "SL 69000", action is MOVE_SL, value is 69000.
 6. If "Cancel" or "Delete Orders" or "Remove Limits", action is CANCEL.
 7. If "TP to 65000" or "Change TP", action is MOVE_TP, value is 65000.
-8. If "Market is slow", "Don't want to risk", "Closing early", "Took profit", "Took TP1", "TP1 Hit", "Profits secured", action is CLOSE_FULL.
+8. If "Market is slow", "Don't want to risk", "Closing early", "Took profit", "Took TP1", "TP1 Hit", "TP1 booked", "Profits secured", action is CLOSE_FULL.
 9. "TARGET", "T1/T2/T3", "OBJECTIVE" refer to TP. "INVALIDATION", "STOP", "STOPLOSS" refer to SL.
 10. Handle loose formatting.
 11. If the message contains words like "idea", "observation", "watching", or "opinion" without a clear "Entry" or "SL" intent, categorize as IGNORE.

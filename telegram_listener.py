@@ -505,7 +505,7 @@ class TelegramListener:
             else:
                  await self.notifier.send(f"⚠️ Failed to update SL for {symbol}. Reason: {msg}")
             
-        elif action in ["CLOSE_FULL", "BOOK_R"]:
+        elif action in ["CLOSE_FULL", "BOOK_R", "CLOSE_PARTIAL"]:
             if action == "BOOK_R" and data.get('value'):
                 r_multiple = data['value']
                 logger.info(f"Booking {r_multiple}R.")
