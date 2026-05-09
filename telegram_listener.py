@@ -71,6 +71,15 @@ class TelegramListener:
                 elif text_upper in ["TRACE", "/TRACE", "OPTIMIZATION"]:
                     await self.send_optimization_trace()
                     return
+                elif text_upper in ["RECHECK", "/RECHECK"]:
+                    await self.recheck_manual_trades()
+                    return
+                elif text_upper in ["PAUSE", "/PAUSE"]:
+                    await self.set_trading_pause(True)
+                    return
+                elif text_upper in ["RESUME", "/RESUME"]:
+                    await self.set_trading_pause(False)
+                    return
 
                 logger.info(f"Received DM from Admin. Processing Signal.")
                 await self.process_message(event, is_mock_override=False)
@@ -112,6 +121,15 @@ class TelegramListener:
         msg_id = event.message.id
         sender_id = event.sender_id
         
+        # --- PAUSE CHECK ---
+        is_paused = await get_setting("trading_paused", "false")
+        if is_paused == "true":
+            logger.info(f"Trading is PAUSED. Ignoring message {msg_id}.")
+            # We only notify if it looks like a trade call to avoid spamming for every message
+            if any(x in text.upper() for x in ["LONG", "SHORT", "ENTRY", "LIMIT"]):
+                 await self.notifier.send(f"⏸️ **Trading is Paused.** Signal ignored: `{text[:30]}...`")
+            return
+            
         # Mock Mode Detection
         # Default to False unless overridden or MOCK prefix used
         is_mock = is_mock_override
@@ -606,6 +624,9 @@ class TelegramListener:
             "**/performance [Month] [Year]** - Monthly stats lookup\n"
             "**/fixhistory** - Sync historical entry prices with exchange\n"
             "**/cleardb** - Wipe all trade history (Careful!)\n"
+            "**/recheck** - Manual sync with exchange for missed trades\n"
+            "**/pause** - Pause automatic trading\n"
+            "**/resume** - Resume automatic trading\n"
             "**/market** - BTC & Top 8 Crypto Price Check\n"
             "**/help** - Show this menu\n"
             "\n"
@@ -659,9 +680,14 @@ class TelegramListener:
             # Fetch Global Risk Multiplier for Status
             risk_mult = await get_setting("risk_multiplier", "1.0")
             risk_pct = float(risk_mult) * 100
+            
+            # Fetch Pause Status
+            is_paused = await get_setting("trading_paused", "false")
+            status_icon = "🟢 RUNNING" if is_paused == "false" else "⏸️ PAUSED"
 
             await self.notifier.send(
                 f"📊 **System Status**\n\n"
+                f"🤖 **Status:** {status_icon}\n"
                 f"💎 **Equity:** ${equity:.2f}\n"
                 f"💵 **Free:** ${free:.2f}\n"
                 f"📉 **Open Trades:** {count}/3\n"
@@ -900,43 +926,7 @@ class TelegramListener:
                 last_positions = current_positions
                 
                 # --- 🕵️ AUTO-DETECT MANUAL TRADES ---
-                try:
-                    open_trades_sync = await get_all_open_trades()
-                    db_symbols = [t['symbol'] for t in open_trades_sync]
-                    
-                    for pos_sym, pos_data in current_positions.items():
-                        norm_pos = pos_sym.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
-                        
-                        # If the exchange has a position NOT in our DB, it was made manually!
-                        if norm_pos not in db_symbols:
-                            import time
-                            # Generate a unique negative message ID for the database
-                            dummy_id = -int(time.time() * 1000) % 1000000000
-                            entry_px = float(pos_data.get('entryPrice', 0))
-                            side = pos_data.get('side', 'long').upper()
-                            leverage = pos_data.get('leverage', 1)
-                            
-                            # --- 🕵️ AUTO-DETECT MANUAL TRADES ---
-                            try:
-                                # Fetch active SL/TP for this manual trade
-                                tp_list, sl_list = await self.exchange.get_active_tp_sl(pos_sym)
-                                sl_val = sl_list[0] if sl_list else 0.0
-                                tp_val = tp_list[0] if tp_list else 0.0
-                                
-                                # Add to Database so it tracks PnL and History natively
-                                await store_trade(dummy_id, "MANUAL", norm_pos, entry_px, sl_val, tp_val, "OPEN", trade_type="MANUAL")
-                                await update_trade_full(dummy_id, "MANUAL", norm_pos, entry_px, sl_val, tp_price=tp_val, status="OPEN", position_side=side, leverage=leverage, notes="Manual Trade")
-                                
-                                sl_display = f" (SL: {sl_val})" if sl_val > 0 else " (No SL)"
-                                logger.info(f"Detected Manual Trade {norm_pos}{sl_display}. Added to DB with ID {dummy_id}.")
-                                await self.notifier.send(f"🕵️ **Manual Trade Detected:** {norm_pos} ({side} x{leverage})\nBot is now tracking this position. You can manage it via chat!{sl_display}")
-                            except Exception as e:
-                                logger.error(f"Error in manual trade detection: {e}")
-                            
-                            # Add to db_symbols to prevent duplicate alerts
-                            db_symbols.append(norm_pos)
-                except Exception as detect_e:
-                    logger.error(f"Manual Trade Detection Error: {detect_e}")
+                await self.detect_manual_trades(current_positions)
                 # ----------------------------------
                 
                 # --- SYNC OPEN TRADES ENTRY PRICE ---
@@ -1292,5 +1282,65 @@ class TelegramListener:
             
         except Exception as e:
              await self.notifier.send(f"⚠️ History Fix Failed: {e}")
+
+    async def set_trading_pause(self, should_pause: bool):
+        """Pauses or resumes automatic trading."""
+        val = "true" if should_pause else "false"
+        await update_setting("trading_paused", val)
+        status = "PAUSED ⏸️" if should_pause else "RESUMED ▶️"
+        await self.notifier.send(f"🤖 **Trading {status}**\nNew signals will {'be ignored' if should_pause else 'now be processed'}.")
+
+    async def recheck_manual_trades(self):
+        """Manually trigger detection of trades on exchange."""
+        await self.notifier.send("🕵️ **Rechecking Exchange...**")
+        try:
+            positions = await self.exchange.get_all_positions()
+            current_positions = {p['symbol']: p for p in positions}
+            found_count = await self.detect_manual_trades(current_positions)
+            
+            if found_count > 0:
+                await self.notifier.send(f"✅ **Recheck Complete.** Found and linked {found_count} manual trades.")
+            else:
+                await self.notifier.send(f"✅ **Recheck Complete.** No new manual trades detected. Database is in sync with exchange.")
+        except Exception as e:
+            logger.error(f"Recheck failed: {e}")
+            await self.notifier.send(f"⚠️ Recheck failed: {e}")
+
+    async def detect_manual_trades(self, current_positions):
+        """Common logic to find exchange positions not in DB."""
+        found_count = 0
+        try:
+            open_trades_sync = await get_all_open_trades()
+            db_symbols = [t['symbol'] for t in open_trades_sync]
+            
+            for pos_sym, pos_data in current_positions.items():
+                norm_pos = pos_sym.replace("/", "").replace(":", "").split("USDT")[0] + "USDT"
+                
+                if norm_pos not in db_symbols:
+                    import time
+                    dummy_id = -int(time.time() * 1000) % 1000000000
+                    entry_px = float(pos_data.get('entryPrice', 0))
+                    side = pos_data.get('side', 'long').upper()
+                    leverage = pos_data.get('leverage', 1)
+                    
+                    try:
+                        tp_list, sl_list = await self.exchange.get_active_tp_sl(pos_sym)
+                        sl_val = sl_list[0] if sl_list else 0.0
+                        tp_val = tp_list[0] if tp_list else 0.0
+                        
+                        await store_trade(dummy_id, "MANUAL", norm_pos, entry_px, sl_val, tp_val, "OPEN", trade_type="MANUAL")
+                        await update_trade_full(dummy_id, "MANUAL", norm_pos, entry_px, sl_val, tp_price=tp_val, status="OPEN", position_side=side, leverage=leverage, notes="Manual Trade")
+                        
+                        sl_display = f" (SL: {sl_val})" if sl_val > 0 else " (No SL)"
+                        logger.info(f"Detected Manual Trade {norm_pos}{sl_display}. ID {dummy_id}.")
+                        await self.notifier.send(f"🕵️ **Manual Trade Detected:** {norm_pos} ({side} x{leverage})\nBot is now tracking this position.{sl_display}")
+                        found_count += 1
+                    except Exception as e:
+                        logger.error(f"Error in manual detection for {pos_sym}: {e}")
+                    
+                    db_symbols.append(norm_pos)
+        except Exception as detect_e:
+            logger.error(f"Manual Detection Loop Error: {detect_e}")
+        return found_count
 
 

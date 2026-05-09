@@ -22,6 +22,18 @@ This guide shows you how to deploy the Bitget Trading Bot to a **completely free
     *   Allow HTTP/HTTPS traffic (optional, but good for updates).
 9.  Click **Create**.
 
+## 1.5. Enable SSH Access (Firewall Rule)
+
+By default, GCP blocks browser-based SSH unless the **Identity-Aware Proxy (IAP)** IP range is allowed in your firewall. If you see **Error 4003**, you must add this rule:
+
+1.  Go to the [Firewall Policies](https://console.cloud.google.com/net-security/firewall-manager/firewall-policies/list) page.
+2.  Click **Create Firewall Rule**.
+3.  **Name**: `allow-ssh-from-iap`.
+4.  **Targets**: `All instances in the network`.
+5.  **Source IPv4 ranges**: `35.235.240.0/20` (This is the specific range GCP uses for IAP).
+6.  **Protocols and ports**: Check **TCP** and type `22`.
+7.  Click **Create**.
+
 ## 2. Connect via SSH
 
 1.  Once the instance is running, click the **SSH** button next to it in the console listing.

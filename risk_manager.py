@@ -63,18 +63,18 @@ class RiskManager:
             return 'ABORT', 0, "Signal Entry is 0"
 
         if explicit_order_type == 'LIMIT':
-            return 'LIMIT', signal_entry, "Explicit Limit Order requested"
+            return 'LIMIT', signal_entry, f"Explicit Limit Order requested (Market: {current_market_price})"
 
         diff_percent = abs(signal_entry - current_market_price) / signal_entry
 
         if diff_percent <= 0.005: # 0.5%
-            return 'MARKET', current_market_price, f"Price within 0.5% ({diff_percent*100:.2f}%)"
+            return 'MARKET', current_market_price, f"Price within 0.5% ({diff_percent*100:.2f}% | Market: {current_market_price})"
             
         elif diff_percent <= 0.010: # 1.0%
-            return 'LIMIT', signal_entry, f"Price deviated {diff_percent*100:.2f}% (0.5-1.0%). Using Limit."
+            return 'LIMIT', signal_entry, f"Price deviated {diff_percent*100:.2f}% (0.5-1.0% | Market: {current_market_price}). Using Limit."
             
         else:
-            return 'ABORT', 0, f"Price deviated {diff_percent*100:.2f}% (>1.0%). Too late."
+            return 'ABORT', 0, f"Price deviated {diff_percent*100:.2f}% (>1.0% | Market: {current_market_price}). Too late."
 
     def scale_price(self, signal_price, market_price):
         """
