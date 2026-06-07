@@ -1,14 +1,63 @@
+# pyrefly: ignore [missing-import]
 from google import genai
+# pyrefly: ignore [missing-import]
 from google.genai import types
 import logging
-import json
 import os
+from pydantic import BaseModel, Field
+from typing import Optional, List, Literal
 from config import GEMINI_API_KEY
 
 logger = logging.getLogger(__name__)
 
 # Initialize Client
 client = genai.Client(api_key=GEMINI_API_KEY)
+
+# Define strict Pydantic Response Schema to enforce compact output
+class TradeParsingResult(BaseModel):
+    type: Literal["TRADE_CALL", "UPDATE", "IGNORE"] = Field(
+        description="The category of the Telegram message: TRADE_CALL, UPDATE, or IGNORE."
+    )
+    symbol: Optional[str] = Field(
+        default=None,
+        description="The trading symbol in uppercase, e.g. BTCUSDT. Strip '#' or '$'."
+    )
+    direction: Optional[Literal["LONG", "SHORT"]] = Field(
+        default=None,
+        description="The trade direction: LONG or SHORT."
+    )
+    entry: Optional[float] = Field(
+        default=None,
+        description="The entry price."
+    )
+    sl: Optional[float] = Field(
+        default=None,
+        description="Stop Loss price."
+    )
+    tp: Optional[List[float]] = Field(
+        default=None,
+        description="List of Take Profit prices."
+    )
+    leverage: Optional[float] = Field(
+        default=None,
+        description="Optional leverage if specified in text."
+    )
+    order_type: Optional[Literal["MARKET", "LIMIT"]] = Field(
+        default=None,
+        description="MARKET or LIMIT. Default to MARKET unless LIMIT is explicitly mentioned."
+    )
+    action: Optional[Literal["MOVE_SL", "MOVE_TP", "CLOSE_FULL", "CLOSE_PARTIAL", "BOOK_R", "CANCEL"]] = Field(
+        default=None,
+        description="The action for an UPDATE message."
+    )
+    value: Optional[str] = Field(
+        default=None,
+        description="The value associated with the action (e.g. 'ENTRY', 'BE', 'LIQ', or a number)."
+    )
+    raw_text: Optional[str] = Field(
+        default=None,
+        description="The specific text segment that triggered the update."
+    )
 
 PROMPT_TEMPLATE = """
 Analyze the following Telegram message from a crypto trading channel.
@@ -17,34 +66,6 @@ Determine if it is a TRADE_CALL, an UPDATE, or IGNORE.
 Message: "{message_text}"
 
 Current context (if reply/edit): {reply_context}
-
-Output strictly in JSON format.
-
-If TRADE_CALL:
-{{
-  "type": "TRADE_CALL",
-  "symbol": "BTCUSDT", (Strip '#' or '$'. Always uppercase.)
-  "direction": "LONG" or "SHORT",
-  "entry": float,
-  "sl": float (Look for 'SL', 'STOP LOSS', 'STOP', 'INVALIDATION', '❌'),
-  "tp": [float, float...] (Take Profit levels. Look for 'TP', 'TARGET', 'T1', 'T2', 'TAKE PROFIT', '🎯'),
-  "leverage": float (optional, if specified),
-  "order_type": "MARKET" or "LIMIT" (Default to MARKET unless "LIMIT" is explicitly mentioned in text)
-}}
-
-If UPDATE (e.g., "Booked 1R", "Took TP1", "TP1 Hit", "Market is slow", "Close here", "Booked 2.5R", "Move SL to Entry", "Close Half", "SL Hit", "Closing $COIN here", "Cancel Orders", "Delete Limits", "TP to 65000", "Change TP"):
-{{
-  "type": "UPDATE",
-  "symbol": "BTCUSDT", (Optional. If not in message, INFER from context/reply chain. Strip #/$)
-  "action": "MOVE_SL" or "MOVE_TP" or "CLOSE_FULL" or "CLOSE_PARTIAL" or "BOOK_R" or "CANCEL",
-  "value": float OR string ("ENTRY", "BE", "LIQ") if applicable,
-  "raw_text": "original text segment" (e.g. "Target 1 Hit")
-}}
-
-If IGNORE (news, fluff, marketing):
-{{
-  "type": "IGNORE"
-}}
 
 Rules:
 1. If "Booked 1R", action is BOOK_R, value is 1.
@@ -63,17 +84,18 @@ Rules:
 
 async def parse_message(message_text, reply_context=""):
     try:
-        # Using the new models.generate_content method from google-genai
         response = client.models.generate_content(
-            model='gemini-2.5-flash', # Switching to Gemini 2.5 Flash as confirmed available
+            model='gemini-2.5-flash',
             contents=PROMPT_TEMPLATE.format(message_text=message_text, reply_context=reply_context),
             config=types.GenerateContentConfig(
-                response_mime_type='application/json'
+                response_mime_type='application/json',
+                response_schema=TradeParsingResult,
             )
         )
         
-        text = response.text.strip()
-        data = json.loads(text)
+        # Safely convert Pydantic model response to standard dictionary
+        parsed_obj: TradeParsingResult = response.parsed
+        data = parsed_obj.model_dump()
         return data
     except Exception as e:
         logger.error(f"Error parsing message: {e}")

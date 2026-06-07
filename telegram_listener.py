@@ -1,3 +1,4 @@
+# pyrefly: ignore [missing-import]
 from telethon import TelegramClient, events
 import logging
 import asyncio
@@ -153,6 +154,11 @@ class TelegramListener:
             logger.info(f"Skipping potential 'idea' signal {msg_id}: {text[:30]}...")
             return
 
+        # Local Pre-Filtering to save API costs
+        if not self.should_parse_message(text, reply_context):
+            logger.info(f"Skipping message {msg_id} locally (no active trade keywords): {text[:50]}...")
+            return
+
         # Parse
         data = await parse_message(text, reply_context)
         data['raw_message'] = text # Inject raw text for advanced processing
@@ -194,6 +200,25 @@ class TelegramListener:
             await self.handle_update(msg_id, data, reply_msg_id=reply_msg.id if reply_msg else None, is_mock=is_mock)
         else:
             logger.info(f"Ignored message type: {data.get('type')}")
+
+    def should_parse_message(self, text: str, reply_context: str = "") -> bool:
+        """Determines if a message is worth sending to Gemini based on action keywords."""
+        import re
+        combined_text = (text + " " + reply_context).upper()
+        
+        # Pre-clean common phrase false positives
+        clean_text = re.sub(r'\bAS\s+LONG\s+AS\b', '', combined_text)
+        
+        # Define whole-word keywords with numeric support for levels like TP1, SL1 etc.
+        keywords = [
+            r'\bLONG\b', r'\bSHORT\b', r'\bBUY\b', r'\bSELL\b',
+            r'\bSL\d*\b', r'\bTP\d*\b', r'\bTARGET\d*\b', r'\bSTOP\b', r'\bINVALIDATION\b',
+            r'\bCLOSE\b', r'\bCANCEL\b', r'\bBOOKED\b', r'\bHIT\b', r'\bMOVE\b', 
+            r'\bEXIT\b', r'\bDELETE\b', r'\bBREAKEVEN\b', r'\bBE\b',
+            r'❌', r'🎯'
+        ]
+        
+        return any(re.search(pattern, clean_text) for pattern in keywords)
 
     async def handle_trade_call(self, msg_id, data, is_mock=False):
         """Returns True if trade was opened or mocked successfully, False if aborted/failed."""
